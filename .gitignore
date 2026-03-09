@@ -17,6 +17,7 @@ build/VSCodeMD/
 
 # Build output
 output/
+output/**
 
 # Config (optional: uncomment if you don't want to commit user config)
 # config.ini
