@@ -1,0 +1,16 @@
+---
+description: Store all planning documents in this project's plans folder
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Plans folder rule (STRICT)
+
+When the user asks for a plan, roadmap, checklist, todo breakdown, milestones, PRD, spec, or “future plans”:
+
+- **STRICT**: ALL plans MUST be created or updated under **this project's root** `.cursor/plans/` folder only (e.g. the repo's `.cursor/plans/` directory).
+- **NEVER** create or store plans in any path outside the project root. If a plan exists there, move/copy it to the project's `.cursor/plans/` folder and delete the non-project copy.
+- Default filename format: `plans/YYYY-MM-DD-<slug>.md`
+- If a plan file already exists for the same topic in the project's `.cursor/plans/`, update that file instead of creating a new one.
+- When responding, prefer writing the plan into the file (via create/update) rather than only chatting it.

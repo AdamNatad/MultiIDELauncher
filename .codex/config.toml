@@ -1,0 +1,7 @@
+# Codex config for this project only.
+# When you open this folder in Cursor/Codex, the workspace is this project;
+# Codex can change files only inside this folder (writes outside require approval).
+
+sandbox_mode = "workspace-write"
+# No approval prompts; dangerous commands still blocked by ~/.codex/rules
+approval_policy = "never"

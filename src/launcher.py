@@ -1,0 +1,1452 @@
+# Multi-IDE Launcher
+# Launch multiple instances of VS Code, Cursor, Codex & Antigravity
+# Build from project root: python build.py
+
+from __future__ import annotations
+
+import glob
+import os
+import re
+import sys
+import shutil
+import platform
+import subprocess
+import ctypes
+import configparser
+import traceback
+import datetime
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import tkinter.font as tkfont
+
+APP_NAME = "Multi-IDE Launcher by Adam Natad"
+APP_TAGLINE = "Launch multiple instances of VS Code, Cursor, Codex & Antigravity"
+CONFIG_FILENAME = "config.ini"
+REPORT_BUGS_URL = "https://github.com/AdamNatad/MultiIDELauncher/issues"
+
+IDE_TYPES = ("vscode", "cursor", "antigravity", "codex")
+IDE_DISPLAY_NAMES = {"vscode": "VS Code", "cursor": "Cursor", "antigravity": "Antigravity", "codex": "Codex"}
+
+_app_ref: "App | None" = None  # used by excepthook
+
+
+# --- Helpers ---
+
+def os_name() -> str:
+    return platform.system()
+
+def app_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+def config_path() -> str:
+    return os.path.join(app_dir(), CONFIG_FILENAME)
+
+
+def app_icon_path() -> str:
+    """app.ico path (dev or frozen)."""
+    return os.path.join(getattr(sys, "_MEIPASS", app_dir()), "app.ico")
+
+def crash_log_path() -> str:
+    return os.path.join(app_dir(), "crash.log")
+
+def norm(p: str) -> str:
+    return os.path.normpath(os.path.expandvars(os.path.expanduser((p or "").strip())))
+
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def get_windows_dpi() -> int:
+    """Windows logical DPI for UI scale Auto; 96 when not Windows."""
+    if platform.system() != "Windows":
+        return 96
+    try:
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        hdc = user32.GetDC(0)
+        if not hdc:
+            return 96
+        dpi = gdi32.GetDeviceCaps(hdc, 88)
+        user32.ReleaseDC(0, hdc)
+        return int(dpi) if dpi and int(dpi) > 0 else 96
+    except Exception:
+        return 96
+
+
+def open_folder_cross_platform(path: str) -> None:
+    path = norm(path)
+    ensure_dir(path)
+    if os_name() == "Windows":
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif os_name() == "Darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+def split_args(extra: str) -> list[str]:
+    extra = (extra or "").strip()
+    if not extra:
+        return []
+    try:
+        import shlex
+        return shlex.split(extra, posix=(os_name() != "Windows"))
+    except Exception:
+        return extra.split()
+
+
+# --- IDE detection ---
+
+def _dedupe_paths(cands: list[str]) -> list[str]:
+    out, seen = [], set()
+    for p in cands:
+        if not p:
+            continue
+        p = norm(p)
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def ide_candidates(ide: str) -> list[str]:
+    cands: list[str] = []
+    local = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+
+    if os_name() == "Windows":
+        if ide == "vscode":
+            cands += [
+                os.path.join(program_files, r"Microsoft VS Code\Code.exe"),
+                os.path.join(program_files_x86, r"Microsoft VS Code\Code.exe"),
+            ]
+            if local:
+                cands += [
+                    os.path.join(local, r"Programs\Microsoft VS Code\Code.exe"),
+                    os.path.join(local, r"Programs\Microsoft VS Code Insiders\Code - Insiders.exe"),
+                ]
+            which_code = shutil.which("code.cmd") or shutil.which("code.exe") or shutil.which("code")
+            if which_code:
+                cands.append(which_code)
+        elif ide == "cursor":
+            if local:
+                cands.append(os.path.join(local, r"Programs\cursor\Cursor.exe"))
+            which_cursor = shutil.which("cursor") or shutil.which("Cursor.exe")
+            if which_cursor:
+                cands.append(which_cursor)
+        elif ide == "antigravity":
+            if local:
+                cands.append(os.path.join(local, r"Programs\Antigravity\Antigravity.exe"))
+            which_agy = shutil.which("Antigravity.exe") or shutil.which("agy")
+            if which_agy:
+                cands.append(which_agy)
+        elif ide == "codex":
+            winapps = os.path.join(program_files, "WindowsApps")
+            if os.path.isdir(winapps):
+                pattern = os.path.join(winapps, "OpenAI.Codex_*")
+                for match in glob.glob(pattern):
+                    exe = os.path.join(match, "app", "Codex.exe")
+                    if os.path.isfile(exe):
+                        cands.append(exe)
+    elif os_name() == "Darwin":
+        if ide == "vscode":
+            cands += [
+                "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+                "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code",
+                os.path.expanduser("~/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"),
+            ]
+            which_code = shutil.which("code")
+            if which_code:
+                cands.insert(0, which_code)
+        elif ide == "cursor":
+            cands.append("/Applications/Cursor.app/Contents/MacOS/Cursor")
+            which_cursor = shutil.which("cursor")
+            if which_cursor:
+                cands.insert(0, which_cursor)
+        elif ide == "antigravity":
+            cands.append("/Applications/Antigravity.app/Contents/MacOS/Antigravity")
+        elif ide == "codex":
+            cands.append("/Applications/Codex.app/Contents/MacOS/Codex")
+    else:
+        if ide == "vscode":
+            cands += ["/usr/bin/code", "/usr/local/bin/code", "/snap/bin/code"]
+            which_code = shutil.which("code")
+            if which_code:
+                cands.insert(0, which_code)
+        elif ide == "cursor":
+            cands.append("/usr/bin/cursor")
+            which_cursor = shutil.which("cursor")
+            if which_cursor:
+                cands.insert(0, which_cursor)
+        elif ide == "antigravity":
+            cands.append("/usr/bin/antigravity")
+        elif ide == "codex":
+            cands.append("/usr/bin/codex")
+
+    return _dedupe_paths(cands)
+
+
+def autodetect_ide_path(ide: str) -> str:
+    for p in ide_candidates(ide):
+        if os.path.isfile(p) or shutil.which(p):
+            return p
+    return ""
+
+
+def is_executable_path(p: str) -> bool:
+    p = norm(p)
+    return bool(p) and (os.path.isfile(p) or shutil.which(p))
+
+
+# --- Config + model ---
+
+class Profile:
+    """Profile for VS Code, Cursor, or Antigravity (user_data + extensions) or Codex (codex_home only)."""
+
+    def __init__(self, ide: str, name: str, user_data: str = "", extensions: str = "", codex_home: str = ""):
+        self.ide = ide
+        self.name = name
+        self.user_data = user_data
+        self.extensions = extensions
+        self.codex_home = codex_home
+
+    def ensure_folders(self) -> None:
+        if self.ide == "codex":
+            ensure_dir(self.codex_home)
+        else:
+            ensure_dir(self.user_data)
+            ensure_dir(self.extensions)
+
+    def folder_path(self) -> str:
+        """Path to open in explorer (user_data or codex_home)."""
+        return self.codex_home if self.ide == "codex" else self.user_data
+
+
+def make_profile_from_name(ide: str, name: str, base_dir: str) -> Profile:
+    """Create a Profile with paths derived from base_dir + ide + sanitized name."""
+    base_dir = norm(base_dir)
+    safe = _sanitize_profile_name(name) or "profile"
+    ide_folder = IDE_DISPLAY_NAMES.get(ide, ide).replace(" ", "")
+    profile_base = os.path.join(base_dir, ide_folder, safe)
+    if ide == "codex":
+        return Profile(ide, name, codex_home=profile_base)
+    return Profile(
+        ide, name,
+        user_data=os.path.join(profile_base, "user-data"),
+        extensions=os.path.join(profile_base, "extensions"),
+    )
+
+
+def _sanitize_profile_name(name: str) -> str:
+    """Sanitize for use in path (remove invalid chars)."""
+    return re.sub(r'[<>:"/\\|?*]', "_", (name or "").strip())
+
+
+class ConfigManager:
+    def __init__(self, path: str):
+        self.path = path
+        self.cfg = configparser.ConfigParser(interpolation=None)
+
+    def _default_base_dir(self) -> str:
+        if os_name() == "Windows":
+            local = os.environ.get("LOCALAPPDATA", "")
+            if local:
+                return os.path.join(local, "MultiIDELauncher", "Profiles")
+            return r"D:\MultiIDE-Profiles"
+        return os.path.expanduser("~/MultiIDELauncher/Profiles")
+
+    def _migrate_old_config(self) -> None:
+        """Migrate old vscode_path + profiles format to new paths + ide|name format."""
+        app = self.cfg["app"]
+        profiles = self.cfg["profiles"]
+        # Migrate old default base_dir to AppData
+        old_defaults = (norm(r"D:\VSCode-UData"), norm(r"D:\MultiIDE-Profiles"))
+        current_base = norm(app.get("base_dir", ""))
+        if current_base in old_defaults:
+            app["base_dir"] = self._default_base_dir()
+        old_vscode = app.get("vscode_path", "")
+        if old_vscode:
+            if "paths" not in self.cfg:
+                self.cfg["paths"] = {}
+            self.cfg["paths"]["vscode"] = old_vscode
+            if "vscode_path" in app:
+                del app["vscode_path"]
+        migrated = False
+        new_profiles = {}
+        for key, value in list(profiles.items()):
+            if "|" not in key and not key.startswith(("vscode|", "cursor|", "antigravity|", "codex|")):
+                new_profiles[f"vscode|{key}"] = value
+                migrated = True
+            else:
+                new_profiles[key] = value
+        if migrated or old_vscode:
+            self.cfg["profiles"] = new_profiles
+            self.save()
+
+    def load(self) -> None:
+        if os.path.isfile(self.path):
+            self.cfg.read(self.path, encoding="utf-8")
+        else:
+            self._create_default()
+
+        if "app" not in self.cfg:
+            self.cfg["app"] = {}
+        if "paths" not in self.cfg:
+            self.cfg["paths"] = {}
+        if "profiles" not in self.cfg:
+            self.cfg["profiles"] = {}
+
+        self._migrate_old_config()
+
+        app = self.cfg["app"]
+        paths = self.cfg["paths"]
+        app.setdefault("base_dir", self._default_base_dir())
+        app.setdefault("open_new_window", "1")
+        app.setdefault("reuse_existing_window", "0")
+        app.setdefault("extra_args", "")
+        app.setdefault("theme", "Dark")
+        app.setdefault("ui_scale", "Auto")
+
+        for ide in IDE_TYPES:
+            paths.setdefault(ide, autodetect_ide_path(ide))
+
+        if "ui_scale" not in app:
+            app["ui_scale"] = "Auto"
+            self.save()
+
+    def _create_default(self) -> None:
+        self.cfg["app"] = {
+            "base_dir": self._default_base_dir(),
+            "open_new_window": "1",
+            "reuse_existing_window": "0",
+            "extra_args": "",
+            "theme": "Dark",
+            "ui_scale": "Auto",
+        }
+        self.cfg["paths"] = {ide: autodetect_ide_path(ide) for ide in IDE_TYPES}
+        self.cfg["profiles"] = {}
+        ensure_dir(app_dir())
+        self.save()
+
+    def save(self) -> None:
+        with open(self.path, "w", encoding="utf-8") as f:
+            self.cfg.write(f)
+
+    def get_app(self) -> dict:
+        return dict(self.cfg["app"])
+
+    def set_app(self, key: str, value: str) -> None:
+        self.cfg["app"][key] = value
+
+    def get_path(self, ide: str) -> str:
+        return norm(self.cfg["paths"].get(ide, ""))
+
+    def set_path(self, ide: str, value: str) -> None:
+        self.cfg["paths"][ide] = value
+
+    def get_profiles_for_ide(self, ide: str) -> list[Profile]:
+        out: list[Profile] = []
+        prefix = f"{ide}|"
+        for key, value in self.cfg["profiles"].items():
+            if not key.startswith(prefix):
+                continue
+            name = key[len(prefix) :]
+            if ide == "codex":
+                out.append(Profile(ide, name, codex_home=norm(value)))
+            else:
+                parts = value.split("|", 1)
+                ud = norm(parts[0]) if parts else ""
+                ex = norm(parts[1]) if len(parts) > 1 else ""
+                out.append(Profile(ide, name, ud, ex))
+        out.sort(key=lambda p: p.name.lower())
+        return out
+
+    def upsert_profile(self, p: Profile) -> None:
+        key = f"{p.ide}|{p.name}"
+        if p.ide == "codex":
+            self.cfg["profiles"][key] = p.codex_home
+        else:
+            self.cfg["profiles"][key] = f"{p.user_data}|{p.extensions}"
+
+    def delete_profile(self, ide: str, name: str) -> None:
+        key = f"{ide}|{name}"
+        if key in self.cfg["profiles"]:
+            del self.cfg["profiles"][key]
+
+
+# --- Simple dialogs ---
+
+def _center_on(master: tk.Misc, win: tk.Toplevel) -> None:
+    win.update_idletasks()
+    w = win.winfo_width()
+    h = win.winfo_height()
+    mx = master.winfo_x()
+    my = master.winfo_y()
+    mw = master.winfo_width()
+    mh = master.winfo_height()
+    x = mx + max(0, (mw - w) // 2)
+    y = my + max(0, (mh - h) // 2)
+    win.geometry(f"+{x}+{y}")
+
+
+class AddProfileDialog(tk.Toplevel):
+    """Simple dialog: profile name only. Paths are derived from base_dir + ide + name."""
+
+    def __init__(self, master: "App", ide: str, initial_name: str = ""):
+        super().__init__(master)
+        self.title(f"Add {IDE_DISPLAY_NAMES.get(ide, ide)} Profile")
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.result: str | None = None
+        self._master_app = getattr(master, "palette", None) and master or None
+        self.var_name = tk.StringVar(value=initial_name or "profile1")
+
+        if self._master_app:
+            self.configure(bg=self._master_app.palette["bg"])
+        frm = ttk.Frame(self, style="Card.TFrame" if self._master_app else "TFrame", padding=16)
+        frm.grid(row=0, column=0, sticky="nsew")
+        frm.columnconfigure(1, weight=1)
+
+        lbl_style = "Card.TLabel" if self._master_app else "TLabel"
+        ttk.Label(frm, text="Profile name", style=lbl_style).grid(row=0, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=self.var_name, width=36).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=1, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
+        ttk.Button(btns, text="Create", style="Accent.TButton", command=self._save, takefocus=False, cursor="hand2").pack(side="left")
+
+        self.bind("<Return>", lambda _e: self._save())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        self.transient(master)
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+    def _save(self) -> None:
+        name = self.var_name.get().strip()
+        if not name:
+            messagebox.showerror(APP_NAME, "Profile name cannot be empty.")
+            return
+        self.result = name
+        self.destroy()
+
+
+class EditProfileDialog(tk.Toplevel):
+    """Simple dialog: rename only."""
+
+    def __init__(self, master: "App", ide: str, initial_name: str):
+        super().__init__(master)
+        self.title(f"Edit {IDE_DISPLAY_NAMES.get(ide, ide)} Profile")
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.result: str | None = None
+        self._master_app = getattr(master, "palette", None) and master or None
+        self.var_name = tk.StringVar(value=initial_name)
+
+        if self._master_app:
+            self.configure(bg=self._master_app.palette["bg"])
+        frm = ttk.Frame(self, style="Card.TFrame" if self._master_app else "TFrame", padding=16)
+        frm.grid(row=0, column=0, sticky="nsew")
+        frm.columnconfigure(1, weight=1)
+
+        lbl_style = "Card.TLabel" if self._master_app else "TLabel"
+        ttk.Label(frm, text="Profile name", style=lbl_style).grid(row=0, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=self.var_name, width=36).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=1, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        ttk.Button(btns, text="Cancel", command=self.destroy, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
+        ttk.Button(btns, text="Save", style="Accent.TButton", command=self._save, takefocus=False, cursor="hand2").pack(side="left")
+
+        self.bind("<Return>", lambda _e: self._save())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        self.transient(master)
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+    def _save(self) -> None:
+        name = self.var_name.get().strip()
+        if not name:
+            messagebox.showerror(APP_NAME, "Profile name cannot be empty.")
+            return
+        self.result = name
+        self.destroy()
+
+
+# --- Delete confirm ---
+
+class DeleteConfirmDialog(tk.Toplevel):
+
+    def __init__(self, master: "App", profile_name: str):
+        super().__init__(master)
+        self.master_app = master
+        self.profile_name = profile_name
+        self.confirmed = False
+
+        self.title("Remove profile")
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.configure(bg=master.palette["bg"])
+
+        outer = ttk.Frame(self, style="Card.TFrame", padding=16)
+        outer.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text=f'"{profile_name}" will be removed from the list.',
+            style="Card.TLabel",
+            font=(master.base_font.cget("family"), master.base_font.cget("size") + 1, "bold"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        ttk.Label(
+            outer,
+            text="Your data folders stay on disk. Use Save Config when you're done to write the change.",
+            style="Card.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 16))
+
+        btn_row = ttk.Frame(outer)
+        btn_row.grid(row=2, column=0, sticky="e")
+        ttk.Button(btn_row, text="Cancel", command=self._cancel, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Remove", style="Danger.TButton", command=self._remove, takefocus=False, cursor="hand2").pack(side="left")
+
+        self.transient(master)
+        self.bind("<Escape>", lambda _e: self._cancel())
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+    def _cancel(self) -> None:
+        self.destroy()
+
+    def _remove(self) -> None:
+        self.confirmed = True
+        self.destroy()
+
+
+# --- Save confirm ---
+
+class SaveConfirmDialog(tk.Toplevel):
+
+    def __init__(self, master: "App"):
+        super().__init__(master)
+        self.confirmed = False
+
+        self.title("Save configuration")
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.configure(bg=master.palette["bg"])
+
+        outer = ttk.Frame(self, style="Card.TFrame", padding=16)
+        outer.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text="Save configuration to file?",
+            style="Card.TLabel",
+            font=(master.base_font.cget("family"), master.base_font.cget("size") + 1, "bold"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        ttk.Label(
+            outer,
+            text="Your current settings will be written to the config file.",
+            style="Card.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 16))
+
+        btn_row = ttk.Frame(outer)
+        btn_row.grid(row=2, column=0, sticky="e")
+        ttk.Button(btn_row, text="Cancel", command=self._cancel, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Save", style="Accent.TButton", command=self._save, takefocus=False, cursor="hand2").pack(side="left")
+
+        self.transient(master)
+        self.bind("<Escape>", lambda _e: self._cancel())
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+    def _cancel(self) -> None:
+        self.destroy()
+
+    def _save(self) -> None:
+        self.confirmed = True
+        self.destroy()
+
+
+# --- Report bugs ---
+
+class ReportBugsDialog(tk.Toplevel):
+
+    def __init__(self, master: "App", error_message: str | None = None):
+        super().__init__(master)
+        self.title("Report Bugs?")
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.configure(bg=master.palette["bg"])
+
+        outer = ttk.Frame(self, style="Card.TFrame", padding=16)
+        outer.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        if error_message:
+            text = f"An unexpected error occurred.\n\n{error_message}\n\nPlease report it at:\n{REPORT_BUGS_URL}"
+        else:
+            text = f"Report bugs or post issues at:\n\n{REPORT_BUGS_URL}"
+        ttk.Label(outer, text=text, style="Card.TLabel", wraplength=360).grid(row=0, column=0, sticky="w", pady=(0, 16))
+        btn_row = ttk.Frame(outer)
+        btn_row.grid(row=1, column=0, sticky="e")
+        ttk.Button(btn_row, text="Copy Url", style="Accent.TButton", command=self._copy_url, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="OK", command=self.destroy, takefocus=False, cursor="hand2").pack(side="left")
+
+        self.transient(master)
+        self.bind("<Return>", lambda _e: self.destroy())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+    def _copy_url(self) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(REPORT_BUGS_URL)
+        self.update()
+
+
+# --- Save and relaunch (UI scale) ---
+
+class SaveAndRelaunchConfirmDialog(tk.Toplevel):
+
+    def __init__(self, master: "App"):
+        super().__init__(master)
+        self.confirmed = False
+
+        self.title("Save and Relaunch?")
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.configure(bg=master.palette["bg"])
+
+        outer = ttk.Frame(self, style="Card.TFrame", padding=16)
+        outer.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text="Save config and relaunch the app to apply the new UI scale?",
+            style="Card.TLabel",
+            wraplength=360,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 16))
+
+        btn_row = ttk.Frame(outer)
+        btn_row.grid(row=1, column=0, sticky="e")
+        ttk.Button(btn_row, text="No", command=self._no, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Yes", style="Accent.TButton", command=self._yes, takefocus=False, cursor="hand2").pack(side="left")
+
+        self.transient(master)
+        self.bind("<Escape>", lambda _e: self._no())
+        self.bind("<Return>", lambda _e: self._yes())
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+    def _no(self) -> None:
+        self.destroy()
+
+    def _yes(self) -> None:
+        self.confirmed = True
+        self.destroy()
+
+
+# --- Info dialog ---
+
+class InfoDialog(tk.Toplevel):
+
+    def __init__(self, master: "App", title: str, message: str):
+        super().__init__(master)
+        self.title(title)
+        self.resizable(False, False)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.configure(bg=master.palette["bg"])
+
+        outer = ttk.Frame(self, style="Card.TFrame", padding=16)
+        outer.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(outer, text=message, style="Card.TLabel", wraplength=360).grid(row=0, column=0, sticky="w", pady=(0, 16))
+        ttk.Button(outer, text="OK", style="Accent.TButton", command=self.destroy, takefocus=False, cursor="hand2").grid(row=1, column=0, sticky="e")
+
+        self.transient(master)
+        self.bind("<Return>", lambda _e: self.destroy())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.grab_set()
+        self.wait_visibility()
+        _center_on(master, self)
+        self.focus_force()
+
+
+# --- Main app ---
+
+class App(tk.Tk):
+    THEME_OPTIONS = ["Dark", "Light"]
+    SCALE_OPTIONS = ["Auto", "100%", "125%", "150%", "175%", "200%", "225%", "250%", "300%"]
+    MIN_WIDTH = 1024  # right rail stays visible
+    MIN_HEIGHT = 620
+
+    @staticmethod
+    def _normalize_theme(raw: str) -> str:
+        v = (raw or "").strip().lower()
+        return "Dark" if v == "dark" else "Light"
+
+    def _theme_is_dark(self) -> bool:
+        return (self.var_theme.get() or "").strip().lower() == "dark"
+
+    def __init__(self):
+        if platform.system() == "Windows":
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+        super().__init__()
+        self.title(APP_NAME)
+        _icon = app_icon_path()
+        if os.path.isfile(_icon):
+            try:
+                self.iconbitmap(_icon)
+            except Exception:
+                pass
+        self.minsize(self.MIN_WIDTH, self.MIN_HEIGHT)
+        self.bind("<Configure>", self._enforce_min_size)
+
+        _config_path = config_path()
+        self._config_existed_at_startup = os.path.isfile(_config_path)
+        self.cm = ConfigManager(_config_path)
+        self.cm.load()
+        app = self.cm.get_app()
+
+        self.var_ide_paths = {ide: tk.StringVar(value=norm(self.cm.get_path(ide))) for ide in IDE_TYPES}
+        self.var_base_dir = tk.StringVar(value=norm(app.get("base_dir", "")))
+        self.var_open_new_window = tk.IntVar(value=int(app.get("open_new_window", "1")))
+        self.var_reuse_existing_window = tk.IntVar(value=int(app.get("reuse_existing_window", "0")))
+        self.var_extra_args = tk.StringVar(value=app.get("extra_args", ""))
+        self.var_theme = tk.StringVar(value=self._normalize_theme(app.get("theme", "Dark")))
+        self.var_ui_scale = tk.StringVar(value=(app.get("ui_scale", "Auto") or "Auto"))
+
+        self.status = tk.StringVar(value=f"Config: {config_path()}")
+
+        self.base_font = tkfont.nametofont("TkDefaultFont")
+        if os_name() == "Windows":
+            try:
+                self.base_font.configure(family="Segoe UI")
+            except Exception:
+                pass
+
+        self.style = ttk.Style(self)
+        try:
+            self.style.theme_use("clam")
+        except Exception:
+            pass
+
+        self.palette = self._palette_dark() if self._theme_is_dark() else self._palette_light()
+        self._apply_style()
+        self._apply_scale()
+        self._build_ui()
+        self._refresh_all_tabs()
+
+        self.update_idletasks()
+        w = self.winfo_width()
+        h = self.winfo_height()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 2)
+        self.geometry(f"+{x}+{y}")
+
+        # “dotted focus” look: prevent focus by default
+        self.bind_all("<Button-1>", self._defocus_on_click, add="+")
+
+        global _app_ref
+        _app_ref = self
+
+    def _enforce_min_size(self, event=None):
+        """Debounced clamp to MIN_WIDTH x MIN_HEIGHT."""
+        if event and event.widget != self:
+            return
+        if hasattr(self, "_enforce_after_id") and self._enforce_after_id is not None:
+            try:
+                self.after_cancel(self._enforce_after_id)
+            except ValueError:
+                pass
+            self._enforce_after_id = None
+        self._enforce_after_id = self.after(100, self._do_enforce_min_size)
+
+    def _do_enforce_min_size(self) -> None:
+        self._enforce_after_id = None
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < self.MIN_WIDTH or h < self.MIN_HEIGHT:
+            self.geometry(f"{max(w, self.MIN_WIDTH)}x{max(h, self.MIN_HEIGHT)}")
+
+    def _defocus_on_click(self, e):
+        try:
+            if isinstance(e.widget, ttk.Button):
+                return
+            w = self.focus_get()
+            if isinstance(w, ttk.Button):
+                self.focus_set()
+        except Exception:
+            pass
+
+    def _report_bugs_enter(self, _e=None) -> None:
+        if hasattr(self, "report_bugs_lbl"):
+            self.report_bugs_lbl.config(fg="red")
+
+    def _report_bugs_leave(self, _e=None) -> None:
+        if hasattr(self, "report_bugs_lbl"):
+            self.report_bugs_lbl.config(fg=self.palette["muted"])
+
+    def _palette_dark(self) -> dict:
+        return {
+            "bg": "#1E1E1E",
+            "panel": "#252526",
+            "panel2": "#2D2D2D",
+            "border": "#3C3C3C",
+            "text": "#D4D4D4",
+            "muted": "#9DA2A6",
+            "accent": "#007ACC",
+            "accent_hover": "#1A8AD4",
+            "danger": "#F14C4C",
+            "danger_hover": "#FF6B6B",
+            "button_hover": "#3C3C3C",
+            "warning": "#F14C4C",
+            "field": "#1F1F1F",
+            "select": "#094771",
+            "button_border": "#6C6C6C",
+        }
+
+    def _palette_light(self) -> dict:
+        return {
+            "bg": "#F3F3F3",
+            "panel": "#FFFFFF",
+            "panel2": "#F6F6F6",
+            "border": "#D0D0D0",
+            "text": "#1E1E1E",
+            "muted": "#5A5A5A",
+            "accent": "#007ACC",
+            "accent_hover": "#3399DD",
+            "danger": "#C62828",
+            "danger_hover": "#E53935",
+            "button_hover": "#E8E8E8",
+            "warning": "#C62828",
+            "field": "#FFFFFF",
+            "select": "#CFE8FF",
+            "button_border": "#5A5A5A",
+        }
+
+    def _apply_style(self) -> None:
+        p = self.palette
+        self.configure(bg=p["bg"])
+
+        self.style.configure(".", background=p["bg"], foreground=p["text"])
+        self.style.configure("TFrame", background=p["bg"])
+        self.style.configure("TLabel", background=p["bg"], foreground=p["text"])
+        self.style.configure("Muted.TLabel", background=p["bg"], foreground=p["muted"])
+        self.style.configure("Card.TLabel", background=p["panel"], foreground=p["text"])
+        self.style.configure("Warning.TLabel", background=p["panel"], foreground=p["warning"], font=(self.base_font.cget("family"), self.base_font.cget("size"), "normal"))
+
+        self.style.configure("Card.TFrame", background=p["panel"], relief="flat", borderwidth=1)
+
+        self.style.configure("TEntry", fieldbackground=p["field"], foreground=p["text"])
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=p["field"],
+            foreground=p["text"],
+            background=p["panel2"],
+            bordercolor=p["button_border"],
+            borderwidth=1,
+            padding=(6, 4),
+            arrowcolor=p["text"],
+        )
+        # Keep text and field colors correct when dropdown is pressed/focused (fixes light theme text turning white)
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", p["field"]),
+                ("focus", p["field"]),
+                ("pressed", p["field"]),
+            ],
+            foreground=[
+                ("readonly", p["text"]),
+                ("focus", p["text"]),
+                ("pressed", p["text"]),
+            ],
+            background=[
+                ("readonly", p["panel2"]),
+                ("focus", p["panel2"]),
+                ("pressed", p["panel2"]),
+            ],
+            arrowcolor=[
+                ("readonly", p["text"]),
+                ("focus", p["text"]),
+                ("pressed", p["text"]),
+            ],
+        )
+
+        self.style.configure(
+            "TButton",
+            background=p["panel2"],
+            foreground=p["text"],
+            padding=(6, 4),
+            relief="solid",
+            borderwidth=1,
+            bordercolor=p["button_border"],
+        )
+        self.style.map("TButton", background=[("active", p["button_hover"]), ("pressed", p["border"])])
+        try:
+            self.style.configure("TButton", focusthickness=0, focuspadding=0)
+        except Exception:
+            pass
+
+        self.style.configure(
+            "Accent.TButton",
+            background=p["accent"],
+            foreground="#FFFFFF",
+            padding=(6, 5),
+            relief="solid",
+            borderwidth=1,
+            bordercolor=p["button_border"],
+        )
+        self.style.map("Accent.TButton", background=[("active", p["accent_hover"]), ("pressed", p["accent"])])
+
+        self.style.configure(
+            "Danger.TButton",
+            background=p["panel2"],
+            foreground=p["danger"],
+            padding=(6, 4),
+            relief="solid",
+            borderwidth=1,
+            bordercolor=p["button_border"],
+        )
+        self.style.map("Danger.TButton", background=[("active", p["button_hover"]), ("pressed", p["border"])])
+
+        self.style.configure("Treeview", background=p["field"], fieldbackground=p["field"], foreground=p["text"], relief="flat", borderwidth=0)
+        self.style.map("Treeview", background=[("selected", p["select"])], foreground=[("selected", "#FFFFFF" if self._theme_is_dark() else p["text"])])
+        self.style.configure("Treeview.Heading", background=p["panel2"], foreground=p["text"], padding=(12, 10), relief="flat")
+
+        # Notebook tabs: high contrast for readability
+        tab_bg_unsel = p["panel2"]
+        tab_bg_sel = p["panel"]
+        tab_fg = "#FFFFFF" if self._theme_is_dark() else "#1E1E1E"
+        self.style.configure("TNotebook", background=p["bg"])
+        self.style.configure(
+            "TNotebook.Tab",
+            background=tab_bg_unsel,
+            foreground=tab_fg,
+            padding=(12, 8),
+        )
+        self.style.map(
+            "TNotebook.Tab",
+            background=[("selected", tab_bg_sel), ("active", p["button_hover"])],
+            foreground=[("selected", tab_fg), ("active", tab_fg)],
+        )
+
+        if hasattr(self, "report_bugs_lbl"):
+            self.report_bugs_lbl.config(fg=p["muted"], bg=p["bg"])
+
+    def _parse_ui_scale(self) -> float | None:
+        v = (self.var_ui_scale.get() or "").strip()
+        if v.lower() == "auto":
+            return None
+        if v.endswith("%"):
+            try:
+                pct = float(v[:-1])
+                factor = pct / 100.0
+                return (96.0 * factor) / 72.0
+            except Exception:
+                return None
+        return None
+
+    def _apply_scale(self) -> None:
+        forced = self._parse_ui_scale()
+        if forced is not None:
+            self.tk.call("tk", "scaling", forced)
+        else:
+            dpi = get_windows_dpi()
+            self.tk.call("tk", "scaling", dpi / 72.0)
+        self.update_idletasks()
+        self._update_tree_rowheight()
+
+    def _update_tree_rowheight(self) -> None:
+        linespace = self.base_font.metrics("linespace")
+        self.style.configure("Treeview", rowheight=max(int(linespace + 16), 34))
+
+    def _build_ui(self) -> None:
+        root = ttk.Frame(self, padding=6)
+        root.grid(row=0, column=0, sticky="nsew")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(root, style="Card.TFrame", padding=6)
+        top.grid(row=0, column=0, sticky="ew")
+        top.columnconfigure(1, weight=1)
+
+        ttk.Label(top, text="Profiles Directory", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        self.entry_base_dir = ttk.Entry(top, textvariable=self.var_base_dir)
+        self.entry_base_dir.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+        ttk.Button(top, text="Browse", command=self._browse_base, takefocus=False, cursor="hand2").grid(row=0, column=2, padx=(0, 4))
+
+        right = ttk.Frame(top, style="Card.TFrame")
+        right.grid(row=0, column=4, sticky="e", padx=(10, 0))
+        ttk.Label(right, text="Theme", style="Card.TLabel").grid(row=0, column=0, sticky="e", padx=(0, 4))
+        theme = ttk.Combobox(right, textvariable=self.var_theme, values=self.THEME_OPTIONS, state="readonly", width=8)
+        theme.grid(row=0, column=1, sticky="e")
+        theme.bind("<<ComboboxSelected>>", lambda _e: self._on_theme_change())
+
+        ttk.Label(right, text="UI Scale", style="Card.TLabel").grid(row=0, column=2, sticky="e", padx=(8, 4))
+        scale = ttk.Combobox(right, textvariable=self.var_ui_scale, values=self.SCALE_OPTIONS, state="readonly", width=8)
+        scale.grid(row=0, column=3, sticky="e")
+        scale.bind("<<ComboboxSelected>>", lambda _e: self._on_scale_change())
+
+        self.entry_base_dir.config(state="disabled")
+
+        self.notebook = ttk.Notebook(root)
+        self.notebook.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        root.rowconfigure(1, weight=1)
+
+        self.trees: dict[str, ttk.Treeview] = {}
+        self.ide_path_entries: dict[str, ttk.Entry] = {}
+
+        for ide in IDE_TYPES:
+            tab = ttk.Frame(self.notebook, padding=8)
+            self.notebook.add(tab, text=IDE_DISPLAY_NAMES.get(ide, ide))
+            tab.columnconfigure(0, weight=1)
+            tab.rowconfigure(1, weight=1)
+
+            path_frm = ttk.Frame(tab, style="Card.TFrame", padding=4)
+            path_frm.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+            path_frm.columnconfigure(1, weight=1)
+            ttk.Label(path_frm, text=f"{IDE_DISPLAY_NAMES.get(ide, ide)} Path", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+            entry = ttk.Entry(path_frm, textvariable=self.var_ide_paths[ide])
+            entry.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+            entry.config(state="disabled")
+            self.ide_path_entries[ide] = entry
+            ttk.Button(path_frm, text="Browse", command=lambda i=ide: self._browse_ide(i), takefocus=False, cursor="hand2").grid(row=0, column=2, padx=(0, 4))
+            ttk.Button(path_frm, text="Detect", command=lambda i=ide: self._detect_ide(i), takefocus=False, cursor="hand2").grid(row=0, column=3)
+
+            body = ttk.Frame(tab)
+            body.grid(row=1, column=0, sticky="nsew")
+            body.columnconfigure(0, weight=1)
+            body.columnconfigure(1, weight=0)
+            body.rowconfigure(0, weight=1)
+
+            header_frm = ttk.Frame(body, style="Card.TFrame")
+            header_frm.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+            header_frm.columnconfigure(0, weight=1)
+            ttk.Label(header_frm, text="Profile", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size"), "bold")).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=6)
+
+            table = ttk.Frame(body)
+            table.grid(row=1, column=0, sticky="nsew")
+            table.columnconfigure(0, weight=1)
+            table.rowconfigure(0, weight=1)
+            cols = ("name",)
+            tree = ttk.Treeview(table, columns=cols, show="headings", height=10, takefocus=False)
+            tree["show"] = "headings"
+            tree.column("name", width=200, minwidth=100, stretch=True, anchor="w")
+            tree.grid(row=0, column=0, sticky="nsew")
+            vsb = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=vsb.set)
+            vsb.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+            tree.bind("<Double-1>", lambda e, i=ide: self._launch_for_ide(i))
+            self.trees[ide] = tree
+
+            rail = ttk.Frame(body, width=130)
+            rail.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(8, 0))
+            rail.grid_propagate(False)
+
+            def rbtn(text, cmd, style="TButton", pady=(0, 4)):
+                b = ttk.Button(rail, text=text, command=cmd, style=style, takefocus=False, cursor="hand2")
+                b.pack(fill="x", pady=pady)
+                return b
+
+            rbtn("Launch", lambda i=ide: self._launch_for_ide(i), style="Accent.TButton", pady=(0, 4))
+            rbtn("Add", lambda i=ide: self._add_profile(i))
+            rbtn("Edit", lambda i=ide: self._edit_profile(i))
+            rbtn("Delete", lambda i=ide: self._delete_profile(i), style="Danger.TButton", pady=(0, 4))
+            ttk.Separator(rail).pack(fill="x", pady=(4, 6))
+            rbtn("Open Profile Folder", lambda i=ide: self._open_profile_folder(i), pady=(0, 4))
+            ttk.Separator(rail).pack(fill="x", pady=(4, 6))
+            rbtn("Save Config", self.save_config)
+            rbtn("Reload", self.reload_config, pady=(0, 0))
+
+        status = ttk.Frame(root, padding=(2, 4, 2, 0))
+        status.grid(row=2, column=0, sticky="ew")
+        status.columnconfigure(0, weight=1)
+        ttk.Label(status, textvariable=self.status, style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+        self.report_bugs_lbl = tk.Label(
+            status,
+            text="Report Bugs?",
+            fg=self.palette["muted"],
+            bg=self.palette["bg"],
+            cursor="hand2",
+            font=(self.base_font.cget("family"), self.base_font.cget("size")),
+        )
+        self.report_bugs_lbl.grid(row=0, column=1, sticky="e")
+        self.report_bugs_lbl.bind("<Enter>", self._report_bugs_enter)
+        self.report_bugs_lbl.bind("<Leave>", self._report_bugs_leave)
+        self.report_bugs_lbl.bind("<Button-1>", lambda _e: ReportBugsDialog(self))
+
+    def _refresh_all_tabs(self) -> None:
+        for ide in IDE_TYPES:
+            tree = self.trees.get(ide)
+            if not tree:
+                continue
+            for item in tree.get_children():
+                tree.delete(item)
+            for p in self.cm.get_profiles_for_ide(ide):
+                tree.insert("", "end", values=(p.name,))
+            kids = tree.get_children()
+            if kids:
+                tree.selection_set(kids[0])
+                tree.focus(kids[0])
+
+    def _current_ide(self) -> str:
+        idx = self.notebook.index(self.notebook.select())
+        return IDE_TYPES[idx] if idx < len(IDE_TYPES) else IDE_TYPES[0]
+
+    def _selected_profile(self, ide: str) -> Profile | None:
+        tree = self.trees.get(ide)
+        if not tree:
+            return None
+        sel = tree.selection()
+        if not sel:
+            return None
+        vals = tree.item(sel[0], "values")
+        if not vals:
+            return None
+        name = vals[0]
+        for p in self.cm.get_profiles_for_ide(ide):
+            if p.name == name:
+                return p
+        return None
+
+    def _browse_ide(self, ide: str) -> None:
+        title = f"Select {IDE_DISPLAY_NAMES.get(ide, ide)} executable"
+        if os_name() == "Windows":
+            fp = filedialog.askopenfilename(title=title, filetypes=[("Executable", "*.exe"), ("All files", "*.*")])
+        else:
+            fp = filedialog.askopenfilename(title=title)
+        if fp:
+            self.ide_path_entries[ide].config(state="normal")
+            self.var_ide_paths[ide].set(norm(fp))
+            self.ide_path_entries[ide].config(state="disabled")
+
+    def _detect_ide(self, ide: str) -> None:
+        p = autodetect_ide_path(ide)
+        if p:
+            self.ide_path_entries[ide].config(state="normal")
+            self.var_ide_paths[ide].set(norm(p))
+            self.ide_path_entries[ide].config(state="disabled")
+            self.status.set(f"Detected {IDE_DISPLAY_NAMES.get(ide, ide)}: {p}")
+        else:
+            messagebox.showwarning(APP_NAME, f"Could not auto-detect {IDE_DISPLAY_NAMES.get(ide, ide)}.")
+
+    def _browse_base(self):
+        d = filedialog.askdirectory(title="Select Profiles Directory")
+        if d:
+            self.entry_base_dir.config(state="normal")
+            self.var_base_dir.set(norm(d))
+            self.entry_base_dir.config(state="disabled")
+
+    def _on_theme_change(self):
+        self.palette = self._palette_dark() if self._theme_is_dark() else self._palette_light()
+        self._apply_style()
+        self._apply_scale()
+
+    def _on_scale_change(self):
+        self._apply_scale()
+        self._apply_style()  # Reapply styles so fonts/row heights reflect new scaling
+        d = SaveAndRelaunchConfirmDialog(self)
+        self.wait_window(d)
+        if not d.confirmed:
+            return
+        self._write_config_to_disk()
+        self._relaunch()
+
+    def _add_profile(self, ide: str) -> None:
+        d = AddProfileDialog(self, ide)
+        self.wait_window(d)
+        if not d.result:
+            return
+        name = d.result.strip()
+        existing = [p.name.lower() for p in self.cm.get_profiles_for_ide(ide)]
+        if name.lower() in existing:
+            messagebox.showerror(APP_NAME, "Profile name already exists.")
+            return
+        p = make_profile_from_name(ide, name, self.var_base_dir.get())
+        p.ensure_folders()
+        self.cm.upsert_profile(p)
+        self._refresh_all_tabs()
+
+    def _edit_profile(self, ide: str) -> None:
+        p = self._selected_profile(ide)
+        if not p:
+            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            return
+        d = EditProfileDialog(self, ide, p.name)
+        self.wait_window(d)
+        if not d.result:
+            return
+        new_name = d.result.strip()
+        if new_name.lower() != p.name.lower():
+            existing = [x.name.lower() for x in self.cm.get_profiles_for_ide(ide) if x.name.lower() != p.name.lower()]
+            if new_name.lower() in existing:
+                messagebox.showerror(APP_NAME, "Another profile with that name already exists.")
+                return
+        if new_name != p.name:
+            self.cm.delete_profile(ide, p.name)
+            new_p = make_profile_from_name(ide, new_name, self.var_base_dir.get())
+            new_p.ensure_folders()
+            self.cm.upsert_profile(new_p)
+        self._refresh_all_tabs()
+
+    def _delete_profile(self, ide: str) -> None:
+        p = self._selected_profile(ide)
+        if not p:
+            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            return
+        d = DeleteConfirmDialog(self, p.name)
+        self.wait_window(d)
+        if not d.confirmed:
+            return
+        self.cm.delete_profile(ide, p.name)
+        self._refresh_all_tabs()
+
+    def _open_profile_folder(self, ide: str) -> None:
+        p = self._selected_profile(ide)
+        if not p:
+            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            return
+        open_folder_cross_platform(p.folder_path())
+
+    def open_base_dir(self):
+        open_folder_cross_platform(self.var_base_dir.get())
+
+    def _write_config_to_disk(self) -> None:
+        """Write current UI state to config file (no dialogs)."""
+        self.cm.set_app("base_dir", norm(self.var_base_dir.get()))
+        self.cm.set_app("open_new_window", "1" if self.var_open_new_window.get() else "0")
+        self.cm.set_app("reuse_existing_window", "1" if self.var_reuse_existing_window.get() else "0")
+        self.cm.set_app("extra_args", (self.var_extra_args.get() or "").strip())
+        self.cm.set_app("theme", self.var_theme.get())
+        self.cm.set_app("ui_scale", self.var_ui_scale.get())
+        for ide in IDE_TYPES:
+            self.cm.set_path(ide, norm(self.var_ide_paths[ide].get()))
+        self.cm.save()
+        self.status.set(f"Saved config: {config_path()}")
+
+    def _relaunch(self) -> None:
+        """Start a new process and exit so the new UI scale takes effect."""
+        try:
+            cwd = app_dir()
+            if getattr(sys, "frozen", False) and platform.system() == "Windows":
+                os.startfile(sys.executable)
+            else:
+                kwargs = {"cwd": cwd}
+                if platform.system() == "Windows":
+                    kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                if getattr(sys, "frozen", False):
+                    subprocess.Popen([sys.executable], **kwargs)
+                else:
+                    subprocess.Popen([sys.executable, os.path.abspath(__file__)], **kwargs)
+            self.after(600, self._exit_after_relaunch)
+        except Exception:
+            InfoDialog(
+                self,
+                "Auto relaunch failed",
+                "Auto relaunch failed. You can manually close and open the program to apply the new UI scale.",
+            )
+
+    def _exit_after_relaunch(self) -> None:
+        self.quit()
+        sys.exit(0)
+
+    def save_config(self):
+        d = SaveConfirmDialog(self)
+        self.wait_window(d)
+        if not d.confirmed:
+            return
+        self._write_config_to_disk()
+        d = InfoDialog(self, "Configuration saved", "Your settings have been written to the config file.")
+        self.wait_window(d)
+
+    def reload_config(self) -> None:
+        self.cm.load()
+        app = self.cm.get_app()
+        for ide in IDE_TYPES:
+            self.var_ide_paths[ide].set(norm(self.cm.get_path(ide)))
+        self.var_base_dir.set(norm(app.get("base_dir", "")))
+        self.var_open_new_window.set(int(app.get("open_new_window", "1")))
+        self.var_reuse_existing_window.set(int(app.get("reuse_existing_window", "0")))
+        self.var_extra_args.set(app.get("extra_args", ""))
+        self.var_theme.set(self._normalize_theme(app.get("theme", "Dark")))
+        self.var_ui_scale.set(app.get("ui_scale", "Auto") or "Auto")
+
+        self.palette = self._palette_dark() if self._theme_is_dark() else self._palette_light()
+        self._apply_style()
+        self._apply_scale()
+        self._refresh_all_tabs()
+        self.status.set(f"Reloaded config: {config_path()}")
+
+    def _launch_for_ide(self, ide: str) -> None:
+        exe = norm(self.var_ide_paths[ide].get())
+        if not is_executable_path(exe):
+            messagebox.showerror(APP_NAME, f"{IDE_DISPLAY_NAMES.get(ide, ide)} path is invalid. Set it in the tab.")
+            return
+
+        p = self._selected_profile(ide)
+        if not p:
+            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            return
+
+        p.ensure_folders()
+
+        try:
+            if ide == "codex":
+                env = os.environ.copy()
+                env["CODEX_HOME"] = p.codex_home
+                subprocess.Popen([exe], env=env, cwd=os.path.dirname(exe) if os.path.isfile(exe) else None)
+            else:
+                args = [
+                    exe,
+                    "--user-data-dir", p.user_data,
+                    "--extensions-dir", p.extensions,
+                ]
+                if self.var_open_new_window.get() and not self.var_reuse_existing_window.get():
+                    args.append("--new-window")
+                args.extend(split_args(self.var_extra_args.get()))
+                subprocess.Popen(args, cwd=os.path.dirname(exe) if os.path.isfile(exe) else None)
+            self.status.set(f"Launched {p.name}")
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"Launch failed:\n\n{e}")
+
+
+# --- Global excepthook ---
+
+def _global_excepthook(exc_type: type, exc_value: BaseException, exc_tb) -> None:
+    """Log to crash.log; show report-bugs modal or fallback."""
+    err = traceback.format_exc()
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(crash_log_path(), "a", encoding="utf-8") as f:
+            f.write("\n" + "=" * 80 + "\n")
+            f.write(f"{stamp}\n")
+            f.write(err)
+    except Exception:
+        pass
+    short = (str(exc_value) or exc_type.__name__).strip() or "Unknown error"
+    try:
+        if _app_ref and _app_ref.winfo_exists():
+            _app_ref.after(0, lambda: ReportBugsDialog(_app_ref, error_message=short))
+        else:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                APP_NAME,
+                f"An unexpected error occurred.\n\n{short}\n\n"
+                f"Please report at: {REPORT_BUGS_URL}",
+            )
+            root.destroy()
+    except Exception:
+        pass
+
+
+# --- Entry ---
+
+def run_app():
+    sys.excepthook = _global_excepthook
+    app = App()
+    app.mainloop()
+
+def crash_safe_main():
+    try:
+        run_app()
+    except Exception:
+        err = traceback.format_exc()
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(crash_log_path(), "a", encoding="utf-8") as f:
+                f.write("\n" + "=" * 80 + "\n")
+                f.write(f"{stamp}\n")
+                f.write(err)
+        except Exception:
+            pass
+
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                APP_NAME,
+                "App crashed on startup.\n\n"
+                "A crash.log file was created beside the EXE.\n\n"
+                "Error:\n" + err.splitlines()[-1]
+            )
+            root.destroy()
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    crash_safe_main()

@@ -1,0 +1,22 @@
+# Local plans (project-specific, not committed)
+plans/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+*.spec
+
+# PyInstaller (build/ keeps our scripts; ignore its output subdirs)
+build/MultiIDELauncher/
+
+# Config (optional: uncomment if you don't want to commit user config)
+# config.ini
+
+# Logs
+crash.log
+*.log
