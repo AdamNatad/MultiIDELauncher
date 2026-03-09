@@ -348,7 +348,7 @@ class ConfigManager:
         self._normalize_ide_paths()
         self._deduplicate_profiles()
 
-        self._merge_scanned_profiles()
+        self.sync_profiles_to_disk()
 
         if "ui_scale" not in app:
             app["ui_scale"] = "Auto"
@@ -526,6 +526,27 @@ class ConfigManager:
                 return key
         return None
 
+    def _remove_profiles_not_on_disk(self) -> bool:
+        """Remove config profiles whose folders no longer exist on disk."""
+        removed = []
+        for key in list(self.cfg["profiles"].keys()):
+            if "|" not in key:
+                continue
+            ide, name = key.split("|", 1)
+            value = self.cfg["profiles"][key]
+            if ide == "codex":
+                folder = norm(value)
+            else:
+                parts = value.split("|", 1)
+                ud = norm(parts[0]) if parts else ""
+                folder = os.path.dirname(ud) if ud else ""
+            if folder and not os.path.isdir(folder):
+                del self.cfg["profiles"][key]
+                removed.append(key)
+        if removed:
+            self.save()
+        return bool(removed)
+
     def _merge_scanned_profiles(self) -> bool:
         """Add profiles from disk; sync config to disk casing when profile exists (case-insensitive)."""
         base_dir = norm(self.cfg["app"].get("base_dir", ""))
@@ -546,6 +567,13 @@ class ConfigManager:
                     changed = True
         if changed:
             self.save()
+        return changed
+
+    def sync_profiles_to_disk(self) -> bool:
+        """Remove profiles not on disk, add new from disk, sync casing. Returns True if config changed."""
+        changed = self._remove_profiles_not_on_disk()
+        if self._merge_scanned_profiles():
+            changed = True
         return changed
 
 
@@ -946,7 +974,7 @@ class App(tk.Tk):
     THEME_OPTIONS = ["Dark", "Light"]
     SCALE_OPTIONS = ["Auto", "100%", "125%", "150%", "175%", "200%", "225%", "250%", "300%"]
     WIDTH = 800
-    HEIGHT = 520
+    HEIGHT = 565
 
     @staticmethod
     def _normalize_theme(raw: str) -> str:
@@ -1335,8 +1363,8 @@ class App(tk.Tk):
         linespace = self.base_font.metrics("linespace")
         self.style.configure("Treeview", rowheight=max(int(linespace + 16), 34))
 
-    def _truncate_status(self, msg: str, max_len: int = 50) -> str:
-        """Truncate long status messages for 800px width."""
+    def _truncate_status(self, msg: str, max_len: int = 70) -> str:
+        """Truncate long status messages; show end of path so filename is visible."""
         if len(msg) <= max_len:
             return msg
         return "..." + msg[-(max_len - 3) :]
