@@ -120,9 +120,18 @@ def clear_output() -> None:
         print(f"  Cleared {OUT_DIR}")
 
 
+def clear_old_build_cache() -> None:
+    """Remove legacy PyInstaller cache (VSCodeMD) from project rename."""
+    legacy = os.path.join(ROOT, "build", "VSCodeMD")
+    if os.path.isdir(legacy):
+        shutil.rmtree(legacy)
+        print(f"  Cleared legacy cache: build/VSCodeMD")
+
+
 def main() -> int:
     print("\n=== Multi-IDE Launcher — Full build (portable ZIP + installer) ===")
     clear_output()
+    clear_old_build_cache()
     if not step_icon():
         return 1
     if not step_pyinstaller():

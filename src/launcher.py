@@ -13,6 +13,7 @@ import platform
 import subprocess
 import ctypes
 import configparser
+import time
 import traceback
 import datetime
 import tkinter as tk
@@ -131,9 +132,10 @@ def ide_candidates(ide: str) -> list[str]:
             if which_code:
                 cands.append(which_code)
         elif ide == "cursor":
+            cands.append(os.path.join(program_files, r"cursor\Cursor.exe"))
             if local:
                 cands.append(os.path.join(local, r"Programs\cursor\Cursor.exe"))
-            which_cursor = shutil.which("cursor") or shutil.which("Cursor.exe")
+            which_cursor = shutil.which("Cursor.exe") or shutil.which("cursor")
             if which_cursor:
                 cands.append(which_cursor)
         elif ide == "antigravity":
@@ -191,13 +193,45 @@ def ide_candidates(ide: str) -> list[str]:
 def autodetect_ide_path(ide: str) -> str:
     for p in ide_candidates(ide):
         if os.path.isfile(p) or shutil.which(p):
-            return p
+            return resolve_ide_exe(p, ide)  # Always return actual .exe, not bin/cursor etc.
     return ""
 
 
 def is_executable_path(p: str) -> bool:
     p = norm(p)
     return bool(p) and (os.path.isfile(p) or shutil.which(p))
+
+
+def resolve_ide_exe(path: str, ide: str) -> str:
+    """Resolve script/launcher paths to actual .exe on Windows (fixes WinError 193)."""
+    path = norm(path)
+    if not path:
+        return path
+    if os_name() != "Windows":
+        return path
+    # Already a proper .exe
+    if path.lower().endswith(".exe") and os.path.isfile(path):
+        return path
+    # Path points to bin/cursor, bin/code, etc. — resolve to parent Cursor.exe, Code.exe
+    path_lower = path.lower().replace("/", "\\")
+    exe_name = None
+    if ide == "cursor" and ("cursor" in path_lower or "bin" in path_lower):
+        exe_name = "Cursor.exe"
+    elif ide == "vscode" and ("code" in path_lower or "bin" in path_lower):
+        exe_name = "Code.exe"
+    elif ide == "antigravity" and ("antigravity" in path_lower or "bin" in path_lower):
+        exe_name = "Antigravity.exe"
+    if exe_name:
+        # Walk up from path to find install root (e.g. .../cursor/ or .../Microsoft VS Code/)
+        dir_ = os.path.dirname(path) if os.path.isfile(path) else path
+        for _ in range(8):  # limit depth
+            if not dir_ or dir_ == os.path.dirname(dir_):
+                break
+            candidate = os.path.join(dir_, exe_name)
+            if os.path.isfile(candidate):
+                return candidate
+            dir_ = os.path.dirname(dir_)
+    return path
 
 
 # --- Config + model ---
@@ -312,6 +346,12 @@ class ConfigManager:
         for ide in IDE_TYPES:
             paths.setdefault(ide, autodetect_ide_path(ide))
 
+        self._normalize_ide_paths()
+
+        merged = self._merge_scanned_profiles()
+        if merged:
+            self.save()
+
         if "ui_scale" not in app:
             app["ui_scale"] = "Auto"
             self.save()
@@ -375,6 +415,84 @@ class ConfigManager:
         if key in self.cfg["profiles"]:
             del self.cfg["profiles"][key]
 
+    def _normalize_ide_paths(self) -> None:
+        """Fix stored paths: resolve bin/cursor etc. to actual .exe; replace invalid paths via autodetect."""
+        paths = self.cfg["paths"]
+        changed = False
+        for ide in IDE_TYPES:
+            p = paths.get(ide, "")
+            resolved = resolve_ide_exe(norm(p), ide) if p else ""
+            if resolved and os.path.isfile(resolved):
+                if resolved != norm(p):
+                    paths[ide] = resolved
+                    changed = True
+            else:
+                detected = autodetect_ide_path(ide)
+                if detected and detected != paths.get(ide, ""):
+                    paths[ide] = detected
+                    changed = True
+        if changed:
+            self.save()
+
+    def recheck_all_paths(self) -> bool:
+        """Run autodetect for all IDEs and update config. Returns True if any path changed."""
+        paths = self.cfg["paths"]
+        changed = False
+        for ide in IDE_TYPES:
+            detected = autodetect_ide_path(ide)
+            current = norm(paths.get(ide, ""))
+            new_val = detected if detected else current
+            if new_val != current:
+                paths[ide] = new_val
+                changed = True
+        if changed:
+            self.save()
+        return changed
+
+    def _scan_profiles_on_disk(self, base_dir: str) -> list[Profile]:
+        """Scan base_dir for existing profile folders and return Profile objects."""
+        base_dir = norm(base_dir)
+        if not os.path.isdir(base_dir):
+            return []
+        discovered: list[Profile] = []
+        for ide in IDE_TYPES:
+            ide_folder = IDE_DISPLAY_NAMES.get(ide, ide).replace(" ", "")
+            ide_path = os.path.join(base_dir, ide_folder)
+            if not os.path.isdir(ide_path):
+                continue
+            try:
+                for name in os.listdir(ide_path):
+                    if name.startswith(".") or name == "__pycache__":
+                        continue
+                    profile_path = os.path.join(ide_path, name)
+                    if not os.path.isdir(profile_path):
+                        continue
+                    if ide == "codex":
+                        discovered.append(Profile(ide, name, codex_home=profile_path))
+                    else:
+                        ud = os.path.join(profile_path, "user-data")
+                        ex = os.path.join(profile_path, "extensions")
+                        if os.path.isdir(ud) and os.path.isdir(ex):
+                            discovered.append(Profile(ide, name, ud, ex))
+            except OSError:
+                continue
+        return discovered
+
+    def _merge_scanned_profiles(self) -> bool:
+        """Add profiles found on disk that are not yet in config. Returns True if any were added."""
+        base_dir = norm(self.cfg["app"].get("base_dir", ""))
+        if not base_dir:
+            return False
+        existing_keys = set(self.cfg["profiles"].keys())
+        added = False
+        for p in self._scan_profiles_on_disk(base_dir):
+            key = f"{p.ide}|{p.name}"
+            if key not in existing_keys:
+                self.upsert_profile(p)
+                existing_keys.add(key)
+                added = True
+        return added
+
 
 # --- Simple dialogs ---
 
@@ -406,7 +524,7 @@ class AddProfileDialog(tk.Toplevel):
                 pass
         self.result: str | None = None
         self._master_app = getattr(master, "palette", None) and master or None
-        self.var_name = tk.StringVar(value=initial_name or "profile1")
+        self.var_name = tk.StringVar(value=initial_name or "Profile1")
 
         if self._master_app:
             self.configure(bg=self._master_app.palette["bg"])
@@ -435,7 +553,8 @@ class AddProfileDialog(tk.Toplevel):
     def _save(self) -> None:
         name = self.var_name.get().strip()
         if not name:
-            messagebox.showerror(APP_NAME, "Profile name cannot be empty.")
+            d = InfoDialog(self.master, APP_NAME, "Profile name cannot be empty.")
+            self.wait_window(d)
             return
         self.result = name
         self.destroy()
@@ -485,7 +604,8 @@ class EditProfileDialog(tk.Toplevel):
     def _save(self) -> None:
         name = self.var_name.get().strip()
         if not name:
-            messagebox.showerror(APP_NAME, "Profile name cannot be empty.")
+            d = InfoDialog(self.master, APP_NAME, "Profile name cannot be empty.")
+            self.wait_window(d)
             return
         self.result = name
         self.destroy()
@@ -495,11 +615,13 @@ class EditProfileDialog(tk.Toplevel):
 
 class DeleteConfirmDialog(tk.Toplevel):
 
-    def __init__(self, master: "App", profile_name: str):
+    def __init__(self, master: "App", profile_name: str, profile: "Profile"):
         super().__init__(master)
         self.master_app = master
         self.profile_name = profile_name
+        self.profile = profile
         self.confirmed = False
+        self.delete_from_disk = False
 
         self.title("Remove profile")
         self.resizable(False, False)
@@ -515,6 +637,7 @@ class DeleteConfirmDialog(tk.Toplevel):
         outer.grid(row=0, column=0, sticky="nsew")
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
 
         ttk.Label(
             outer,
@@ -525,12 +648,24 @@ class DeleteConfirmDialog(tk.Toplevel):
 
         ttk.Label(
             outer,
-            text="Your data folders stay on disk. Use Save Config when you're done to write the change.",
+            text="Your data folders stay on disk unless you check the option below.",
             style="Card.TLabel",
-        ).grid(row=1, column=0, sticky="w", pady=(0, 16))
+        ).grid(row=1, column=0, sticky="w", pady=(0, 8))
+
+        ttk.Separator(outer, orient="horizontal").grid(row=2, column=0, sticky="ew", pady=(0, 12))
+
+        self.var_delete_disk = tk.IntVar(value=0)
+        cb = ttk.Checkbutton(
+            outer,
+            text="Delete folder and files on disk",
+            variable=self.var_delete_disk,
+            style="Danger.TCheckbutton",
+            takefocus=False,
+        )
+        cb.grid(row=3, column=0, sticky="w", pady=(0, 16))
 
         btn_row = ttk.Frame(outer)
-        btn_row.grid(row=2, column=0, sticky="e")
+        btn_row.grid(row=4, column=0, sticky="e")
         ttk.Button(btn_row, text="Cancel", command=self._cancel, takefocus=False, cursor="hand2").pack(side="left", padx=(0, 8))
         ttk.Button(btn_row, text="Remove", style="Danger.TButton", command=self._remove, takefocus=False, cursor="hand2").pack(side="left")
 
@@ -546,6 +681,7 @@ class DeleteConfirmDialog(tk.Toplevel):
 
     def _remove(self) -> None:
         self.confirmed = True
+        self.delete_from_disk = bool(self.var_delete_disk.get())
         self.destroy()
 
 
@@ -768,6 +904,7 @@ class App(tk.Tk):
             except Exception:
                 pass
         self.minsize(self.MIN_WIDTH, self.MIN_HEIGHT)
+        # Throttled min-size enforcement — avoids lag during drag resize
         self.bind("<Configure>", self._enforce_min_size)
 
         _config_path = config_path()
@@ -804,6 +941,7 @@ class App(tk.Tk):
         self._apply_scale()
         self._build_ui()
         self._refresh_all_tabs()
+        self._on_tab_changed()  # focus content, not tab label
 
         self.update_idletasks()
         w = self.winfo_width()
@@ -821,16 +959,21 @@ class App(tk.Tk):
         _app_ref = self
 
     def _enforce_min_size(self, event=None):
-        """Debounced clamp to MIN_WIDTH x MIN_HEIGHT."""
+        """Throttled + debounced clamp to MIN_WIDTH x MIN_HEIGHT. Reduces resize lag."""
         if event and event.widget != self:
             return
+        now = time.time()
+        # Throttle: skip if we scheduled recently (avoids 60+ cancel/schedule per sec)
+        if hasattr(self, "_enforce_last") and (now - self._enforce_last) < 0.08:
+            return
+        self._enforce_last = now
         if hasattr(self, "_enforce_after_id") and self._enforce_after_id is not None:
             try:
                 self.after_cancel(self._enforce_after_id)
             except ValueError:
                 pass
             self._enforce_after_id = None
-        self._enforce_after_id = self.after(100, self._do_enforce_min_size)
+        self._enforce_after_id = self.after(150, self._do_enforce_min_size)
 
     def _do_enforce_min_size(self) -> None:
         self._enforce_after_id = None
@@ -867,13 +1010,14 @@ class App(tk.Tk):
             "muted": "#9DA2A6",
             "accent": "#007ACC",
             "accent_hover": "#1A8AD4",
+            "accent_border": "#1A8AD4",
             "danger": "#F14C4C",
             "danger_hover": "#FF6B6B",
-            "button_hover": "#3C3C3C",
+            "button_hover": "#4A4A4A",
             "warning": "#F14C4C",
             "field": "#1F1F1F",
             "select": "#094771",
-            "button_border": "#6C6C6C",
+            "button_border": "#5A5A5A",
         }
 
     def _palette_light(self) -> dict:
@@ -886,13 +1030,14 @@ class App(tk.Tk):
             "muted": "#5A5A5A",
             "accent": "#007ACC",
             "accent_hover": "#3399DD",
+            "accent_border": "#0066B3",
             "danger": "#C62828",
             "danger_hover": "#E53935",
-            "button_hover": "#E8E8E8",
+            "button_hover": "#D0D0D0",
             "warning": "#C62828",
             "field": "#FFFFFF",
             "select": "#CFE8FF",
-            "button_border": "#5A5A5A",
+            "button_border": "#909090",
         }
 
     def _apply_style(self) -> None:
@@ -906,7 +1051,21 @@ class App(tk.Tk):
         self.style.configure("Card.TLabel", background=p["panel"], foreground=p["text"])
         self.style.configure("Warning.TLabel", background=p["panel"], foreground=p["warning"], font=(self.base_font.cget("family"), self.base_font.cget("size"), "normal"))
 
-        self.style.configure("Card.TFrame", background=p["panel"], relief="flat", borderwidth=1)
+        self.style.configure("Card.TFrame", background=p["panel"], relief="flat", borderwidth=1, bordercolor=p["border"])
+        self.style.configure(
+            "Card.TCheckbutton",
+            background=p["panel"],
+            foreground=p["text"],
+            indicatorsize=20,
+        )
+        self.style.map("Card.TCheckbutton", background=[("active", p["panel"])], foreground=[("active", p["text"])])
+        self.style.configure(
+            "Danger.TCheckbutton",
+            background=p["panel"],
+            foreground=p["danger"],
+            indicatorsize=24,
+        )
+        self.style.map("Danger.TCheckbutton", background=[("active", p["panel"])], foreground=[("active", p["danger"])])
 
         self.style.configure("TEntry", fieldbackground=p["field"], foreground=p["text"])
         self.style.configure(
@@ -944,16 +1103,41 @@ class App(tk.Tk):
             ],
         )
 
+        # Button layout with visible borders (clam: border attr sets size, relief="solid" draws it)
+        try:
+            self.style.layout(
+                "TButton",
+                [
+                    (
+                        "Button.border",
+                        {"sticky": "nswe", "border": "2", "children": [
+                            ("Button.focus", {"sticky": "nswe", "children": [
+                                ("Button.padding", {"sticky": "nswe", "children": [("Button.label", {"sticky": "nswe"})]})
+                            ]})
+                        ]},
+                    )
+                ],
+            )
+        except Exception:
+            pass
         self.style.configure(
             "TButton",
             background=p["panel2"],
             foreground=p["text"],
-            padding=(6, 4),
+            padding=(8, 6),
             relief="solid",
-            borderwidth=1,
+            borderwidth=2,
             bordercolor=p["button_border"],
+            darkcolor=p["panel2"],
+            lightcolor=p["panel2"],
         )
-        self.style.map("TButton", background=[("active", p["button_hover"]), ("pressed", p["border"])])
+        self.style.map(
+            "TButton",
+            background=[("active", p["button_hover"]), ("pressed", p["button_hover"])],
+            bordercolor=[("active", p["button_border"]), ("pressed", p["button_border"])],
+            darkcolor=[("active", p["button_hover"]), ("pressed", p["button_hover"])],
+            lightcolor=[("active", p["button_hover"]), ("pressed", p["button_hover"])],
+        )
         try:
             self.style.configure("TButton", focusthickness=0, focuspadding=0)
         except Exception:
@@ -963,47 +1147,120 @@ class App(tk.Tk):
             "Accent.TButton",
             background=p["accent"],
             foreground="#FFFFFF",
-            padding=(6, 5),
+            padding=(8, 6),
             relief="solid",
-            borderwidth=1,
-            bordercolor=p["button_border"],
+            borderwidth=2,
+            bordercolor=p["accent_border"],
+            darkcolor=p["accent"],
+            lightcolor=p["accent"],
         )
-        self.style.map("Accent.TButton", background=[("active", p["accent_hover"]), ("pressed", p["accent"])])
+        self.style.map(
+            "Accent.TButton",
+            background=[("active", p["accent_hover"]), ("pressed", p["accent_hover"])],
+            bordercolor=[("active", p["accent_border"]), ("pressed", p["accent_border"])],
+            darkcolor=[("active", p["accent_hover"]), ("pressed", p["accent_hover"])],
+            lightcolor=[("active", p["accent_hover"]), ("pressed", p["accent_hover"])],
+        )
 
         self.style.configure(
             "Danger.TButton",
             background=p["panel2"],
             foreground=p["danger"],
-            padding=(6, 4),
+            padding=(8, 6),
             relief="solid",
-            borderwidth=1,
+            borderwidth=2,
             bordercolor=p["button_border"],
+            darkcolor=p["panel2"],
+            lightcolor=p["panel2"],
         )
-        self.style.map("Danger.TButton", background=[("active", p["button_hover"]), ("pressed", p["border"])])
+        self.style.map(
+            "Danger.TButton",
+            background=[("active", p["button_hover"]), ("pressed", p["button_hover"])],
+            bordercolor=[("active", p["button_border"]), ("pressed", p["button_border"])],
+            darkcolor=[("active", p["button_hover"]), ("pressed", p["button_hover"])],
+            lightcolor=[("active", p["button_hover"]), ("pressed", p["button_hover"])],
+        )
 
+        self.style.configure("TSeparator", background=p["border"])
         self.style.configure("Treeview", background=p["field"], fieldbackground=p["field"], foreground=p["text"], relief="flat", borderwidth=0)
         self.style.map("Treeview", background=[("selected", p["select"])], foreground=[("selected", "#FFFFFF" if self._theme_is_dark() else p["text"])])
-        self.style.configure("Treeview.Heading", background=p["panel2"], foreground=p["text"], padding=(12, 10), relief="flat")
 
-        # Notebook tabs: high contrast for readability
-        tab_bg_unsel = p["panel2"]
-        tab_bg_sel = p["panel"]
-        tab_fg = "#FFFFFF" if self._theme_is_dark() else "#1E1E1E"
-        self.style.configure("TNotebook", background=p["bg"])
+        # Notebook tabs: completely flat, no sunken, no focus outline
+        if self._theme_is_dark():
+            tab_bg_unsel = "#2D2D2D"
+            tab_bg_sel = "#3C3C3C"
+            tab_bg_hover = "#404040"
+            tab_fg = "#FFFFFF"
+        else:
+            tab_bg_unsel = "#E8E8E8"
+            tab_bg_sel = "#FFFFFF"
+            tab_bg_hover = "#D8D8D8"
+            tab_fg = "#1E1E1E"
+        self.style.configure("TNotebook", background=p["bg"], tabmargins=[2, 5, 2, 0])
+        # Flat tab layout: no focus element, borderwidth 0, all colors match (no 3D)
+        try:
+            self.style.layout(
+                "TNotebook.Tab",
+                [
+                    (
+                        "Notebook.tab",
+                        {
+                            "sticky": "nswe",
+                            "children": [
+                                (
+                                    "Notebook.padding",
+                                    {
+                                        "side": "top",
+                                        "sticky": "nswe",
+                                        "children": [("Notebook.label", {"side": "top", "sticky": ""})],
+                                    },
+                                )
+                            ],
+                        },
+                    )
+                ],
+            )
+        except Exception:
+            pass
         self.style.configure(
             "TNotebook.Tab",
             background=tab_bg_unsel,
             foreground=tab_fg,
             padding=(12, 8),
+            borderwidth=0,
+            bordercolor=tab_bg_unsel,
+            darkcolor=tab_bg_unsel,
+            lightcolor=tab_bg_unsel,
         )
         self.style.map(
             "TNotebook.Tab",
-            background=[("selected", tab_bg_sel), ("active", p["button_hover"])],
-            foreground=[("selected", tab_fg), ("active", tab_fg)],
+            background=[
+                ("selected", tab_bg_sel),
+                ("active", tab_bg_hover),
+            ],
+            foreground=[
+                ("selected", tab_fg),
+                ("active", tab_fg),
+            ],
+            bordercolor=[
+                ("selected", tab_bg_sel),
+                ("active", tab_bg_hover),
+            ],
+            darkcolor=[
+                ("selected", tab_bg_sel),
+                ("active", tab_bg_hover),
+            ],
+            lightcolor=[
+                ("selected", tab_bg_sel),
+                ("active", tab_bg_hover),
+            ],
         )
 
         if hasattr(self, "report_bugs_lbl"):
             self.report_bugs_lbl.config(fg=p["muted"], bg=p["bg"])
+        for rail in getattr(self, "rails", []):
+            if rail.winfo_exists():
+                rail.configure(bg=p["bg"])
 
     def _parse_ui_scale(self) -> float | None:
         v = (self.var_ui_scale.get() or "").strip()
@@ -1052,12 +1309,12 @@ class App(tk.Tk):
         right = ttk.Frame(top, style="Card.TFrame")
         right.grid(row=0, column=4, sticky="e", padx=(10, 0))
         ttk.Label(right, text="Theme", style="Card.TLabel").grid(row=0, column=0, sticky="e", padx=(0, 4))
-        theme = ttk.Combobox(right, textvariable=self.var_theme, values=self.THEME_OPTIONS, state="readonly", width=8)
+        theme = ttk.Combobox(right, textvariable=self.var_theme, values=self.THEME_OPTIONS, state="readonly", width=8, cursor="hand2")
         theme.grid(row=0, column=1, sticky="e")
         theme.bind("<<ComboboxSelected>>", lambda _e: self._on_theme_change())
 
         ttk.Label(right, text="UI Scale", style="Card.TLabel").grid(row=0, column=2, sticky="e", padx=(8, 4))
-        scale = ttk.Combobox(right, textvariable=self.var_ui_scale, values=self.SCALE_OPTIONS, state="readonly", width=8)
+        scale = ttk.Combobox(right, textvariable=self.var_ui_scale, values=self.SCALE_OPTIONS, state="readonly", width=8, cursor="hand2")
         scale.grid(row=0, column=3, sticky="e")
         scale.bind("<<ComboboxSelected>>", lambda _e: self._on_scale_change())
 
@@ -1066,9 +1323,16 @@ class App(tk.Tk):
         self.notebook = ttk.Notebook(root)
         self.notebook.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         root.rowconfigure(1, weight=1)
+        self.notebook.configure(takefocus=False)
+        try:
+            self.notebook.configure(cursor="hand2")
+        except Exception:
+            pass
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self.trees: dict[str, ttk.Treeview] = {}
         self.ide_path_entries: dict[str, ttk.Entry] = {}
+        self.rails: list[tk.Frame] = []
 
         for ide in IDE_TYPES:
             tab = ttk.Frame(self.notebook, padding=8)
@@ -1096,16 +1360,14 @@ class App(tk.Tk):
             header_frm = ttk.Frame(body, style="Card.TFrame")
             header_frm.grid(row=0, column=0, sticky="ew", pady=(0, 4))
             header_frm.columnconfigure(0, weight=1)
-            ttk.Label(header_frm, text="Profile", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size"), "bold")).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=6)
+            ttk.Label(header_frm, text="Multi-IDE Launcher Profiles", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size"), "bold")).grid(row=0, column=0, sticky="w", padx=(12, 8), pady=6)
 
             table = ttk.Frame(body)
             table.grid(row=1, column=0, sticky="nsew")
             table.columnconfigure(0, weight=1)
             table.rowconfigure(0, weight=1)
-            cols = ("name",)
-            tree = ttk.Treeview(table, columns=cols, show="headings", height=10, takefocus=False)
-            tree["show"] = "headings"
-            tree.column("name", width=200, minwidth=100, stretch=True, anchor="w")
+            tree = ttk.Treeview(table, columns=(), show="tree", height=10, takefocus=False)
+            tree.column("#0", width=200, minwidth=100, stretch=True, anchor="w")
             tree.grid(row=0, column=0, sticky="nsew")
             vsb = ttk.Scrollbar(table, orient="vertical", command=tree.yview)
             tree.configure(yscrollcommand=vsb.set)
@@ -1113,19 +1375,24 @@ class App(tk.Tk):
             tree.bind("<Double-1>", lambda e, i=ide: self._launch_for_ide(i))
             self.trees[ide] = tree
 
-            rail = ttk.Frame(body, width=130)
+            rail = tk.Frame(body, width=130, bg=self.palette["bg"], cursor="hand2")
             rail.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(8, 0))
             rail.grid_propagate(False)
+            self.rails.append(rail)
 
             def rbtn(text, cmd, style="TButton", pady=(0, 4)):
-                b = ttk.Button(rail, text=text, command=cmd, style=style, takefocus=False, cursor="hand2")
+                b = ttk.Button(rail, text=text, command=cmd, style=style, takefocus=False)
                 b.pack(fill="x", pady=pady)
+                try:
+                    b.configure(cursor="hand2")
+                except Exception:
+                    pass
                 return b
 
-            rbtn("Launch", lambda i=ide: self._launch_for_ide(i), style="Accent.TButton", pady=(0, 4))
-            rbtn("Add", lambda i=ide: self._add_profile(i))
-            rbtn("Edit", lambda i=ide: self._edit_profile(i))
-            rbtn("Delete", lambda i=ide: self._delete_profile(i), style="Danger.TButton", pady=(0, 4))
+            rbtn("Launch Profile", lambda i=ide: self._launch_for_ide(i), style="Accent.TButton", pady=(0, 4))
+            rbtn("Create Profile", lambda i=ide: self._add_profile(i))
+            rbtn("Edit Profile", lambda i=ide: self._edit_profile(i))
+            rbtn("Delete Profile", lambda i=ide: self._delete_profile(i), style="Danger.TButton", pady=(0, 4))
             ttk.Separator(rail).pack(fill="x", pady=(4, 6))
             rbtn("Open Profile Folder", lambda i=ide: self._open_profile_folder(i), pady=(0, 4))
             ttk.Separator(rail).pack(fill="x", pady=(4, 6))
@@ -1157,11 +1424,18 @@ class App(tk.Tk):
             for item in tree.get_children():
                 tree.delete(item)
             for p in self.cm.get_profiles_for_ide(ide):
-                tree.insert("", "end", values=(p.name,))
+                tree.insert("", "end", text=p.name)
             kids = tree.get_children()
             if kids:
                 tree.selection_set(kids[0])
                 tree.focus(kids[0])
+
+    def _on_tab_changed(self, _e=None) -> None:
+        """Move focus from tab label to content so no dotted focus ring on tabs."""
+        ide = self._current_ide()
+        tree = self.trees.get(ide)
+        if tree and tree.winfo_exists():
+            tree.focus_set()
 
     def _current_ide(self) -> str:
         idx = self.notebook.index(self.notebook.select())
@@ -1174,10 +1448,9 @@ class App(tk.Tk):
         sel = tree.selection()
         if not sel:
             return None
-        vals = tree.item(sel[0], "values")
-        if not vals:
+        name = tree.item(sel[0], "text")
+        if not name:
             return None
-        name = vals[0]
         for p in self.cm.get_profiles_for_ide(ide):
             if p.name == name:
                 return p
@@ -1197,12 +1470,14 @@ class App(tk.Tk):
     def _detect_ide(self, ide: str) -> None:
         p = autodetect_ide_path(ide)
         if p:
+            p = resolve_ide_exe(norm(p), ide)  # prefer .exe over bin/cursor script
             self.ide_path_entries[ide].config(state="normal")
-            self.var_ide_paths[ide].set(norm(p))
+            self.var_ide_paths[ide].set(p)
             self.ide_path_entries[ide].config(state="disabled")
             self.status.set(f"Detected {IDE_DISPLAY_NAMES.get(ide, ide)}: {p}")
         else:
-            messagebox.showwarning(APP_NAME, f"Could not auto-detect {IDE_DISPLAY_NAMES.get(ide, ide)}.")
+            d = InfoDialog(self, APP_NAME, f"Could not auto-detect {IDE_DISPLAY_NAMES.get(ide, ide)}.")
+            self.wait_window(d)
 
     def _browse_base(self):
         d = filedialog.askdirectory(title="Select Profiles Directory")
@@ -1227,14 +1502,22 @@ class App(tk.Tk):
         self._relaunch()
 
     def _add_profile(self, ide: str) -> None:
-        d = AddProfileDialog(self, ide)
+        existing = [p.name for p in self.cm.get_profiles_for_ide(ide)]
+        suggested = "Profile1"
+        for i in range(1, 999):
+            cand = f"Profile{i}"
+            if cand not in existing and cand.lower() not in [x.lower() for x in existing]:
+                suggested = cand
+                break
+        d = AddProfileDialog(self, ide, suggested)
         self.wait_window(d)
         if not d.result:
             return
         name = d.result.strip()
         existing = [p.name.lower() for p in self.cm.get_profiles_for_ide(ide)]
         if name.lower() in existing:
-            messagebox.showerror(APP_NAME, "Profile name already exists.")
+            d = InfoDialog(self, APP_NAME, "Profile name already exists.")
+            self.wait_window(d)
             return
         p = make_profile_from_name(ide, name, self.var_base_dir.get())
         p.ensure_folders()
@@ -1244,7 +1527,8 @@ class App(tk.Tk):
     def _edit_profile(self, ide: str) -> None:
         p = self._selected_profile(ide)
         if not p:
-            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            d = InfoDialog(self, APP_NAME, "Select a profile first.")
+            self.wait_window(d)
             return
         d = EditProfileDialog(self, ide, p.name)
         self.wait_window(d)
@@ -1254,7 +1538,8 @@ class App(tk.Tk):
         if new_name.lower() != p.name.lower():
             existing = [x.name.lower() for x in self.cm.get_profiles_for_ide(ide) if x.name.lower() != p.name.lower()]
             if new_name.lower() in existing:
-                messagebox.showerror(APP_NAME, "Another profile with that name already exists.")
+                d = InfoDialog(self, APP_NAME, "Another profile with that name already exists.")
+                self.wait_window(d)
                 return
         if new_name != p.name:
             self.cm.delete_profile(ide, p.name)
@@ -1266,19 +1551,30 @@ class App(tk.Tk):
     def _delete_profile(self, ide: str) -> None:
         p = self._selected_profile(ide)
         if not p:
-            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            d = InfoDialog(self, APP_NAME, "Select a profile first.")
+            self.wait_window(d)
             return
-        d = DeleteConfirmDialog(self, p.name)
+        d = DeleteConfirmDialog(self, p.name, p)
         self.wait_window(d)
         if not d.confirmed:
             return
+        if d.delete_from_disk:
+            folder = p.codex_home if p.ide == "codex" else os.path.dirname(p.user_data)
+            if folder and os.path.isdir(folder):
+                try:
+                    shutil.rmtree(folder)
+                    self.status.set(f"Removed profile and deleted: {folder}")
+                except Exception as e:
+                    d = InfoDialog(self, APP_NAME, f"Could not delete folder:\n\n{e}")
+                    self.wait_window(d)
         self.cm.delete_profile(ide, p.name)
         self._refresh_all_tabs()
 
     def _open_profile_folder(self, ide: str) -> None:
         p = self._selected_profile(ide)
         if not p:
-            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            d = InfoDialog(self, APP_NAME, "Select a profile first.")
+            self.wait_window(d)
             return
         open_folder_cross_platform(p.folder_path())
 
@@ -1335,6 +1631,7 @@ class App(tk.Tk):
 
     def reload_config(self) -> None:
         self.cm.load()
+        self.cm.recheck_all_paths()
         app = self.cm.get_app()
         for ide in IDE_TYPES:
             self.var_ide_paths[ide].set(norm(self.cm.get_path(ide)))
@@ -1349,17 +1646,21 @@ class App(tk.Tk):
         self._apply_style()
         self._apply_scale()
         self._refresh_all_tabs()
+        self._on_tab_changed()
         self.status.set(f"Reloaded config: {config_path()}")
 
     def _launch_for_ide(self, ide: str) -> None:
-        exe = norm(self.var_ide_paths[ide].get())
-        if not is_executable_path(exe):
-            messagebox.showerror(APP_NAME, f"{IDE_DISPLAY_NAMES.get(ide, ide)} path is invalid. Set it in the tab.")
-            return
-
         p = self._selected_profile(ide)
         if not p:
-            messagebox.showinfo(APP_NAME, "Select a profile first.")
+            d = InfoDialog(self, APP_NAME, "Select a profile first.")
+            self.wait_window(d)
+            return
+
+        exe = norm(self.var_ide_paths[ide].get())
+        exe = resolve_ide_exe(exe, ide)  # resolve bin/cursor etc. to Cursor.exe
+        if not is_executable_path(exe):
+            d = InfoDialog(self, APP_NAME, f"{IDE_DISPLAY_NAMES.get(ide, ide)} path is invalid. Set it in the tab.")
+            self.wait_window(d)
             return
 
         p.ensure_folders()
@@ -1381,7 +1682,8 @@ class App(tk.Tk):
                 subprocess.Popen(args, cwd=os.path.dirname(exe) if os.path.isfile(exe) else None)
             self.status.set(f"Launched {p.name}")
         except Exception as e:
-            messagebox.showerror(APP_NAME, f"Launch failed:\n\n{e}")
+            d = InfoDialog(self, APP_NAME, f"Launch failed:\n\n{e}")
+            self.wait_window(d)
 
 
 # --- Global excepthook ---

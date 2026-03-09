@@ -13,6 +13,10 @@ dist/
 
 # PyInstaller (build/ keeps our scripts; ignore its output subdirs)
 build/MultiIDELauncher/
+build/VSCodeMD/
+
+# Build output
+output/
 
 # Config (optional: uncomment if you don't want to commit user config)
 # config.ini
