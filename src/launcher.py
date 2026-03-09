@@ -1137,7 +1137,7 @@ class App(tk.Tk):
             "Danger.TCheckbutton",
             background=p["panel"],
             foreground=p["danger"],
-            indicatorsize=24,
+            indicatorsize=32,
         )
         self.style.map("Danger.TCheckbutton", background=[("active", p["panel"])], foreground=[("active", p["danger"])])
 
