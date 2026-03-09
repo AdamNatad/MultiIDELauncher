@@ -684,6 +684,7 @@ class DeleteConfirmDialog(tk.Toplevel):
             variable=self.var_delete_disk,
             style="Danger.TCheckbutton",
             takefocus=False,
+            cursor="hand2",
         )
         cb.grid(row=3, column=0, sticky="w", pady=(0, 16))
 
@@ -1418,7 +1419,6 @@ class App(tk.Tk):
             ttk.Separator(rail).pack(fill="x", pady=(2, 3))
             rbtn("Open Profile Folder", lambda i=ide: self._open_profile_folder(i), pady=(0, 2))
             ttk.Separator(rail).pack(fill="x", pady=(2, 3))
-            rbtn("Save Profiles", self.save_config, pady=(0, 2))
             rbtn("Reload Profiles", self.reload_config, pady=(0, 0))
 
         status = ttk.Frame(root, padding=(2, 4, 2, 0))
@@ -1544,6 +1544,7 @@ class App(tk.Tk):
         p.ensure_folders()
         self.cm.upsert_profile(p)
         self._refresh_all_tabs()
+        self._write_config_to_disk()
 
     def _edit_profile(self, ide: str) -> None:
         p = self._selected_profile(ide)
@@ -1583,6 +1584,7 @@ class App(tk.Tk):
             self.cm.delete_profile(ide, p.name)
             self.cm.upsert_profile(new_p)
         self._refresh_all_tabs()
+        self._write_config_to_disk()
 
     def _delete_profile(self, ide: str) -> None:
         p = self._selected_profile(ide)
@@ -1605,6 +1607,7 @@ class App(tk.Tk):
                     self.wait_window(d)
         self.cm.delete_profile(ide, p.name)
         self._refresh_all_tabs()
+        self._write_config_to_disk()
 
     def _open_profile_folder(self, ide: str) -> None:
         p = self._selected_profile(ide)
