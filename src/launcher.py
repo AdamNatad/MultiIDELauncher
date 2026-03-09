@@ -1029,9 +1029,12 @@ class App(tk.Tk):
 
         self.style = ttk.Style(self)
         try:
-            self.style.theme_use("clam")
+            self.style.theme_use("alt")
         except Exception:
-            pass
+            try:
+                self.style.theme_use("clam")
+            except Exception:
+                pass
 
         self.palette = self._palette_dark() if self._theme_is_dark() else self._palette_light()
         self._apply_style()
@@ -1267,7 +1270,17 @@ class App(tk.Tk):
             tab_bg_sel = "#FFFFFF"
             tab_bg_hover = "#D8D8D8"
             tab_fg = "#1E1E1E"
-        self.style.configure("TNotebook", background=p["bg"], tabmargins=[2, 5, 2, 0])
+        self.style.configure(
+            "TNotebook",
+            background=p["bg"],
+            tabmargins=[2, 5, 2, 0],
+            borderwidth=0,
+            highlightbackground=p["bg"],
+        )
+        try:
+            self.style.layout("TNotebook", [])
+        except Exception:
+            pass
         # Flat tab layout: no focus element, borderwidth 0, all colors match (no 3D)
         try:
             self.style.layout(
