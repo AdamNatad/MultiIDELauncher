@@ -1359,13 +1359,14 @@ class App(tk.Tk):
             body = ttk.Frame(tab)
             body.grid(row=1, column=0, sticky="nsew")
             body.columnconfigure(0, weight=1)
-            body.columnconfigure(1, weight=0, minsize=145)
-            body.rowconfigure(0, weight=1)
+            body.columnconfigure(1, weight=0, minsize=190)
+            body.rowconfigure(0, weight=0)
+            body.rowconfigure(1, weight=1)
 
             header_frm = ttk.Frame(body, style="Card.TFrame")
             header_frm.grid(row=0, column=0, sticky="ew", pady=(0, 2))
             header_frm.columnconfigure(0, weight=1)
-            ttk.Label(header_frm, text="Multi-IDE Launcher Profiles", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size"), "bold")).grid(row=0, column=0, sticky="w", padx=(8, 6), pady=4)
+            ttk.Label(header_frm, text="Multi-IDE Launcher Profiles", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size") - 1, "bold")).grid(row=0, column=0, sticky="w", padx=(8, 6), pady=2)
 
             table = ttk.Frame(body)
             table.grid(row=1, column=0, sticky="nsew")
@@ -1380,7 +1381,7 @@ class App(tk.Tk):
             tree.bind("<Double-1>", lambda e, i=ide: self._launch_for_ide(i))
             self.trees[ide] = tree
 
-            rail_canvas = tk.Canvas(body, width=145, bg=self.palette["bg"], highlightthickness=0)
+            rail_canvas = tk.Canvas(body, width=190, bg=self.palette["bg"], highlightthickness=0)
             rail_canvas.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(8, 0))
             rail = tk.Frame(rail_canvas, bg=self.palette["bg"], cursor="hand2")
             rail_window = rail_canvas.create_window((0, 0), window=rail, anchor="nw")
@@ -1413,15 +1414,15 @@ class App(tk.Tk):
                     pass
                 return b
 
-            rbtn("Launch", lambda i=ide: self._launch_for_ide(i), style="Accent.TButton", pady=(0, 2))
-            rbtn("Create", lambda i=ide: self._add_profile(i), pady=(0, 2))
-            rbtn("Edit", lambda i=ide: self._edit_profile(i), pady=(0, 2))
-            rbtn("Delete", lambda i=ide: self._delete_profile(i), style="Danger.TButton", pady=(0, 2))
+            rbtn("Launch Profile", lambda i=ide: self._launch_for_ide(i), style="Accent.TButton", pady=(0, 2))
+            rbtn("Create Profile", lambda i=ide: self._add_profile(i), pady=(0, 2))
+            rbtn("Edit Profile", lambda i=ide: self._edit_profile(i), pady=(0, 2))
+            rbtn("Delete Profile", lambda i=ide: self._delete_profile(i), style="Danger.TButton", pady=(0, 2))
             ttk.Separator(rail).pack(fill="x", pady=(2, 3))
-            rbtn("Open Dir", lambda i=ide: self._open_profile_folder(i), pady=(0, 2))
+            rbtn("Open Profile Folder", lambda i=ide: self._open_profile_folder(i), pady=(0, 2))
             ttk.Separator(rail).pack(fill="x", pady=(2, 3))
-            rbtn("Save", self.save_config, pady=(0, 2))
-            rbtn("Reload", self.reload_config, pady=(0, 0))
+            rbtn("Save Profiles", self.save_config, pady=(0, 2))
+            rbtn("Reload Profiles", self.reload_config, pady=(0, 0))
 
         status = ttk.Frame(root, padding=(2, 4, 2, 0))
         status.grid(row=2, column=0, sticky="ew")
