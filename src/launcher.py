@@ -1567,10 +1567,23 @@ class App(tk.Tk):
 
     def _browse_ide(self, ide: str) -> None:
         title = f"Select {IDE_DISPLAY_NAMES.get(ide, ide)} executable"
+        current = norm(self.var_ide_paths[ide].get())
+        initialdir = None
+        if current:
+            if os.path.isfile(current):
+                initialdir = os.path.dirname(current)
+            elif os.path.isdir(current):
+                initialdir = current
+            else:
+                initialdir = os.path.dirname(current) if os.path.dirname(current) else None
         if os_name() == "Windows":
-            fp = filedialog.askopenfilename(title=title, filetypes=[("Executable", "*.exe"), ("All files", "*.*")])
+            fp = filedialog.askopenfilename(
+                title=title,
+                filetypes=[("Executable", "*.exe"), ("All files", "*.*")],
+                initialdir=initialdir,
+            )
         else:
-            fp = filedialog.askopenfilename(title=title)
+            fp = filedialog.askopenfilename(title=title, initialdir=initialdir)
         if fp:
             self.ide_path_entries[ide].config(state="normal")
             self.var_ide_paths[ide].set(norm(fp))
@@ -1589,7 +1602,10 @@ class App(tk.Tk):
             self.wait_window(d)
 
     def _browse_base(self):
-        d = filedialog.askdirectory(title="Select Profiles Directory")
+        initialdir = norm(self.var_base_dir.get()) if self.var_base_dir.get() else None
+        if initialdir and not os.path.isdir(initialdir):
+            initialdir = os.path.dirname(initialdir) if os.path.dirname(initialdir) else None
+        d = filedialog.askdirectory(title="Select Profiles Directory", initialdir=initialdir)
         if d:
             self.entry_base_dir.config(state="normal")
             self.var_base_dir.set(norm(d))
