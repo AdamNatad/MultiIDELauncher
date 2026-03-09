@@ -386,11 +386,24 @@ class ConfigManager:
 
     def get_profiles_for_ide(self, ide: str) -> list[Profile]:
         out: list[Profile] = []
+        base_dir = norm(self.cfg["app"].get("base_dir", ""))
+        ide_folder = IDE_DISPLAY_NAMES.get(ide, ide).replace(" ", "")
+        parent_dir = os.path.join(base_dir, ide_folder) if base_dir else ""
+        disk_names: dict[str, str] = {}
+        if parent_dir and os.path.isdir(parent_dir):
+            try:
+                for entry in os.listdir(parent_dir):
+                    if os.path.isdir(os.path.join(parent_dir, entry)):
+                        disk_names[entry.lower()] = entry
+            except OSError:
+                pass
         prefix = f"{ide}|"
         for key, value in self.cfg["profiles"].items():
             if not key.startswith(prefix):
                 continue
             name = key[len(prefix) :]
+            if disk_names and name.lower() in disk_names:
+                name = disk_names[name.lower()]
             if ide == "codex":
                 out.append(Profile(ide, name, codex_home=norm(value)))
             else:
@@ -933,7 +946,7 @@ class App(tk.Tk):
     THEME_OPTIONS = ["Dark", "Light"]
     SCALE_OPTIONS = ["Auto", "100%", "125%", "150%", "175%", "200%", "225%", "250%", "300%"]
     WIDTH = 800
-    HEIGHT = 600
+    HEIGHT = 520
 
     @staticmethod
     def _normalize_theme(raw: str) -> str:

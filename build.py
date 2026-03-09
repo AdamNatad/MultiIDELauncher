@@ -19,12 +19,29 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+EXE_PROCESS_NAME = "MultiIDELauncher.exe"
 EXE_NAME = "MultiIDELauncher.exe"
 OUT_DIR = os.path.join(ROOT, "output")
 PORTABLE_ZIP = os.path.join(ROOT, "output", "MultiIDELauncher-Portable.zip")
 SETUP_EXE = os.path.join(ROOT, "output", "MultiIDELauncher-Setup.exe")
 DIST_EXE = os.path.join(ROOT, "dist", EXE_NAME)
 ISCC = r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+
+
+def kill_running_process() -> None:
+    """Kill MultiIDELauncher if running so the build can overwrite the EXE."""
+    if sys.platform != "win32":
+        return
+    try:
+        r = subprocess.run(
+            ["taskkill", "/IM", EXE_PROCESS_NAME, "/F"],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        if r.returncode == 0:
+            print(f"  Killed running {EXE_PROCESS_NAME}")
+    except Exception:
+        pass
 
 
 def run(cmd: list[str], cwd: str | None = None) -> bool:
@@ -130,6 +147,7 @@ def clear_old_build_cache() -> None:
 
 def main() -> int:
     print("\n=== Multi-IDE Launcher — Full build (portable ZIP + installer) ===")
+    kill_running_process()
     clear_output()
     clear_old_build_cache()
     if not step_icon():
