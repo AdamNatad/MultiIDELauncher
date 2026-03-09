@@ -348,9 +348,7 @@ class ConfigManager:
         self._normalize_ide_paths()
         self._deduplicate_profiles()
 
-        merged = self._merge_scanned_profiles()
-        if merged:
-            self.save()
+        self._merge_scanned_profiles()
 
         if "ui_scale" not in app:
             app["ui_scale"] = "Auto"
@@ -411,8 +409,9 @@ class ConfigManager:
             self.cfg["profiles"][key] = f"{p.user_data}|{p.extensions}"
 
     def delete_profile(self, ide: str, name: str) -> None:
-        key = f"{ide}|{name}"
-        if key in self.cfg["profiles"]:
+        """Delete profile by name (case-insensitive lookup)."""
+        key = self._find_profile_key(ide, name)
+        if key:
             del self.cfg["profiles"][key]
 
     def _normalize_ide_paths(self) -> None:
@@ -503,18 +502,38 @@ class ConfigManager:
         """Return set of profile names (lowercase) for an IDE."""
         return {p.name.lower() for p in self.get_profiles_for_ide(ide)}
 
+    def _find_profile_key(self, ide: str, name: str) -> str | None:
+        """Find config key for profile by case-insensitive name. Used for delete and merge."""
+        name_lower = name.lower()
+        prefix = f"{ide}|"
+        for key in self.cfg["profiles"]:
+            if not key.startswith(prefix):
+                continue
+            if key[len(prefix) :].lower() == name_lower:
+                return key
+        return None
+
     def _merge_scanned_profiles(self) -> bool:
-        """Add profiles found on disk that are not yet in config. Returns True if any were added."""
+        """Add profiles from disk; sync config to disk casing when profile exists (case-insensitive)."""
         base_dir = norm(self.cfg["app"].get("base_dir", ""))
         if not base_dir:
             return False
-        added = False
+        changed = False
         for p in self._scan_profiles_on_disk(base_dir):
-            existing = self._existing_profile_names_lower(p.ide)
-            if p.name.lower() not in existing:
+            existing_lower = self._existing_profile_names_lower(p.ide)
+            if p.name.lower() not in existing_lower:
                 self.upsert_profile(p)
-                added = True
-        return added
+                changed = True
+            else:
+                # Profile exists case-insensitively; sync config to disk casing
+                old_key = self._find_profile_key(p.ide, p.name)
+                if old_key and old_key != f"{p.ide}|{p.name}":
+                    value = self.cfg["profiles"].pop(old_key)
+                    self.cfg["profiles"][f"{p.ide}|{p.name}"] = value
+                    changed = True
+        if changed:
+            self.save()
+        return changed
 
 
 # --- Simple dialogs ---
@@ -537,6 +556,7 @@ class AddProfileDialog(tk.Toplevel):
 
     def __init__(self, master: "App", ide: str, initial_name: str = ""):
         super().__init__(master)
+        self.withdraw()
         self.title(f"Add {IDE_DISPLAY_NAMES.get(ide, ide)} Profile")
         self.resizable(False, False)
         _icon = app_icon_path()
@@ -569,6 +589,7 @@ class AddProfileDialog(tk.Toplevel):
 
         self.transient(master)
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
@@ -588,6 +609,7 @@ class EditProfileDialog(tk.Toplevel):
 
     def __init__(self, master: "App", ide: str, initial_name: str):
         super().__init__(master)
+        self.withdraw()
         self.title(f"Edit {IDE_DISPLAY_NAMES.get(ide, ide)} Profile")
         self.resizable(False, False)
         _icon = app_icon_path()
@@ -620,6 +642,7 @@ class EditProfileDialog(tk.Toplevel):
 
         self.transient(master)
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
@@ -640,6 +663,7 @@ class DeleteConfirmDialog(tk.Toplevel):
 
     def __init__(self, master: "App", profile_name: str, profile: "Profile"):
         super().__init__(master)
+        self.withdraw()
         self.master_app = master
         self.profile_name = profile_name
         self.profile = profile
@@ -696,6 +720,7 @@ class DeleteConfirmDialog(tk.Toplevel):
         self.transient(master)
         self.bind("<Escape>", lambda _e: self._cancel())
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
@@ -715,6 +740,7 @@ class SaveConfirmDialog(tk.Toplevel):
 
     def __init__(self, master: "App"):
         super().__init__(master)
+        self.withdraw()
         self.confirmed = False
 
         self.title("Save configuration")
@@ -753,6 +779,7 @@ class SaveConfirmDialog(tk.Toplevel):
         self.transient(master)
         self.bind("<Escape>", lambda _e: self._cancel())
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
@@ -771,6 +798,7 @@ class ReportBugsDialog(tk.Toplevel):
 
     def __init__(self, master: "App", error_message: str | None = None):
         super().__init__(master)
+        self.withdraw()
         self.title("Report Bugs?")
         self.resizable(False, False)
         _icon = app_icon_path()
@@ -800,6 +828,7 @@ class ReportBugsDialog(tk.Toplevel):
         self.bind("<Return>", lambda _e: self.destroy())
         self.bind("<Escape>", lambda _e: self.destroy())
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
@@ -816,6 +845,7 @@ class SaveAndRelaunchConfirmDialog(tk.Toplevel):
 
     def __init__(self, master: "App"):
         super().__init__(master)
+        self.withdraw()
         self.confirmed = False
 
         self.title("Save and Relaunch?")
@@ -849,6 +879,7 @@ class SaveAndRelaunchConfirmDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self._no())
         self.bind("<Return>", lambda _e: self._yes())
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
@@ -867,6 +898,7 @@ class InfoDialog(tk.Toplevel):
 
     def __init__(self, master: "App", title: str, message: str):
         super().__init__(master)
+        self.withdraw()
         self.title(title)
         self.resizable(False, False)
         _icon = app_icon_path()
@@ -889,6 +921,7 @@ class InfoDialog(tk.Toplevel):
         self.bind("<Return>", lambda _e: self.destroy())
         self.bind("<Escape>", lambda _e: self.destroy())
         self.grab_set()
+        self.deiconify()
         self.wait_visibility()
         _center_on(master, self)
         self.focus_force()
