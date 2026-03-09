@@ -1315,12 +1315,28 @@ class App(tk.Tk):
         ttk.Label(top, text="Theme", style="Card.TLabel").grid(row=0, column=3, sticky="e", padx=(8, 4))
         theme = ttk.Combobox(top, textvariable=self.var_theme, values=self.THEME_OPTIONS, state="readonly", width=6, cursor="hand2")
         theme.grid(row=0, column=4, sticky="e")
-        theme.bind("<<ComboboxSelected>>", lambda _e: self._on_theme_change())
+
+        def _blur_combobox(cb: ttk.Combobox) -> None:
+            try:
+                cb.selection_clear()
+            except Exception:
+                pass
+            self.focus_set()
+
+        def _on_theme_and_blur(e):
+            self._on_theme_change()
+            self.after(0, lambda: _blur_combobox(e.widget))
+
+        def _on_scale_and_blur(e):
+            self._on_scale_change()
+            self.after(0, lambda: _blur_combobox(e.widget))
+
+        theme.bind("<<ComboboxSelected>>", _on_theme_and_blur)
 
         ttk.Label(top, text="Scale", style="Card.TLabel").grid(row=0, column=5, sticky="e", padx=(4, 4))
         scale = ttk.Combobox(top, textvariable=self.var_ui_scale, values=self.SCALE_OPTIONS, state="readonly", width=6, cursor="hand2")
         scale.grid(row=0, column=6, sticky="e")
-        scale.bind("<<ComboboxSelected>>", lambda _e: self._on_scale_change())
+        scale.bind("<<ComboboxSelected>>", _on_scale_and_blur)
 
         self.entry_base_dir.config(state="disabled")
 
@@ -1358,8 +1374,8 @@ class App(tk.Tk):
 
             body = ttk.Frame(tab)
             body.grid(row=1, column=0, sticky="nsew")
-            body.columnconfigure(0, weight=1)
-            body.columnconfigure(1, weight=0, minsize=190)
+            body.columnconfigure(0, weight=0, minsize=500)
+            body.columnconfigure(1, weight=1, minsize=190)
             body.rowconfigure(0, weight=0)
             body.rowconfigure(1, weight=1)
 
@@ -1381,29 +1397,10 @@ class App(tk.Tk):
             tree.bind("<Double-1>", lambda e, i=ide: self._launch_for_ide(i))
             self.trees[ide] = tree
 
-            rail_canvas = tk.Canvas(body, width=190, bg=self.palette["bg"], highlightthickness=0)
-            rail_canvas.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(8, 0))
-            rail = tk.Frame(rail_canvas, bg=self.palette["bg"], cursor="hand2")
-            rail_window = rail_canvas.create_window((0, 0), window=rail, anchor="nw")
+            rail = tk.Frame(body, bg=self.palette["bg"], cursor="hand2")
+            rail.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(8, 0))
+            rail.columnconfigure(0, weight=1)
             self.rails.append(rail)
-            self.rail_canvases.append(rail_canvas)
-
-            def _on_rail_scroll(e):
-                if platform.system() == "Windows":
-                    rail_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-                else:
-                    rail_canvas.yview_scroll(int(-1 * e.delta), "units")
-
-            rail_canvas.bind("<MouseWheel>", _on_rail_scroll)
-
-            def _on_rail_configure(_e):
-                rail_canvas.configure(scrollregion=rail_canvas.bbox("all"))
-
-            def _on_canvas_configure(e):
-                rail_canvas.itemconfig(rail_window, width=e.width)
-
-            rail.bind("<Configure>", _on_rail_configure)
-            rail_canvas.bind("<Configure>", _on_canvas_configure)
 
             def rbtn(text, cmd, style="TButton", pady=(0, 2)):
                 b = ttk.Button(rail, text=text, command=cmd, style=style, takefocus=False)
