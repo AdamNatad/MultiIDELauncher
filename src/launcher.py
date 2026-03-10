@@ -1,5 +1,5 @@
 # Multi-IDE Launcher
-# Launch multiple instances of VS Code, Cursor, Codex & Antigravity
+# Launch multiple instances of VSCode, Cursor, Codex, Antigravity & Claude
 # Build from project root: python build.py
 
 from __future__ import annotations
@@ -20,12 +20,12 @@ from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
 
 APP_NAME = "Multi-IDE Launcher by Adam Natad"
-APP_TAGLINE = "Launch multiple instances of VS Code, Cursor, Codex & Antigravity"
+APP_TAGLINE = "Launch multiple instances of VSCode, Cursor, Codex, Antigravity & Claude"
 CONFIG_FILENAME = "config.ini"
 REPORT_BUGS_URL = "https://github.com/AdamNatad/MultiIDELauncher/issues"
 
-IDE_TYPES = ("vscode", "cursor", "antigravity", "codex")
-IDE_DISPLAY_NAMES = {"vscode": "VS Code", "cursor": "Cursor", "antigravity": "Antigravity", "codex": "Codex"}
+IDE_TYPES = ("vscode", "cursor", "antigravity", "codex", "claude")
+IDE_DISPLAY_NAMES = {"vscode": "VSCode", "cursor": "Cursor", "antigravity": "Antigravity", "codex": "Codex", "claude": "Claude"}
 
 _app_ref: "App | None" = None  # used by excepthook
 
@@ -151,6 +151,14 @@ def ide_candidates(ide: str) -> list[str]:
                     exe = os.path.join(match, "app", "Codex.exe")
                     if os.path.isfile(exe):
                         cands.append(exe)
+        elif ide == "claude":
+            winapps = os.path.join(program_files, "WindowsApps")
+            if os.path.isdir(winapps):
+                pattern = os.path.join(winapps, "Claude_*")
+                for match in glob.glob(pattern):
+                    exe = os.path.join(match, "app", "claude.exe")
+                    if os.path.isfile(exe):
+                        cands.append(exe)
     elif os_name() == "Darwin":
         if ide == "vscode":
             cands += [
@@ -170,6 +178,8 @@ def ide_candidates(ide: str) -> list[str]:
             cands.append("/Applications/Antigravity.app/Contents/MacOS/Antigravity")
         elif ide == "codex":
             cands.append("/Applications/Codex.app/Contents/MacOS/Codex")
+        elif ide == "claude":
+            cands.append("/Applications/Claude Code.app/Contents/MacOS/claude")
     else:
         if ide == "vscode":
             cands += ["/usr/bin/code", "/usr/local/bin/code", "/snap/bin/code"]
@@ -185,6 +195,8 @@ def ide_candidates(ide: str) -> list[str]:
             cands.append("/usr/bin/antigravity")
         elif ide == "codex":
             cands.append("/usr/bin/codex")
+        elif ide == "claude":
+            cands.append("/usr/bin/claude")
 
     return _dedupe_paths(cands)
 
@@ -220,6 +232,8 @@ def resolve_ide_exe(path: str, ide: str) -> str:
         exe_name = "Code.exe"
     elif ide == "antigravity" and ("antigravity" in path_lower or "bin" in path_lower):
         exe_name = "Antigravity.exe"
+    elif ide == "claude" and ("claude" in path_lower or "bin" in path_lower):
+        exe_name = "claude.exe"
     if exe_name:
         # Walk up from path to find install root (e.g. .../cursor/ or .../Microsoft VS Code/)
         dir_ = os.path.dirname(path) if os.path.isfile(path) else path
@@ -309,7 +323,7 @@ class ConfigManager:
         migrated = False
         new_profiles = {}
         for key, value in list(profiles.items()):
-            if "|" not in key and not key.startswith(("vscode|", "cursor|", "antigravity|", "codex|")):
+            if "|" not in key and not key.startswith(("vscode|", "cursor|", "antigravity|", "codex|", "claude|")):
                 new_profiles[f"vscode|{key}"] = value
                 migrated = True
             else:
@@ -1137,7 +1151,7 @@ class App(tk.Tk):
             "Danger.TCheckbutton",
             background=p["panel"],
             foreground=p["danger"],
-            indicatorsize=32,
+            indicatorsize=256,
         )
         self.style.map("Danger.TCheckbutton", background=[("active", p["panel"])], foreground=[("active", p["danger"])])
 
