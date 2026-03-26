@@ -1,6 +1,20 @@
-# Build — Multi-IDE Launcher (v2.0.0)
+# Build — IDE Launcher (v2.0.1)
 
 Build produces **two artifacts** in `output/`: **portable ZIP** and **installer** (Setup.exe).
+
+---
+
+## Build scripts
+
+All build automation for this repo:
+
+| File | Purpose |
+|------|---------|
+| [`build.py`](build.py) (project root) | **Main entry.** Clears `output/`, drops legacy PyInstaller folders under `build/`, runs icon step → PyInstaller → portable ZIP → Inno installer. |
+| [`build/build_icon.py`](build/build_icon.py) | Converts `assets/app_icon.png` (or a path you pass) to `app.ico` in the project root. Invoked by `build.py` when the PNG exists; can be run alone for icon-only refresh. |
+| [`build/installer.iss`](build/installer.iss) | Inno Setup 6 script: packages `dist/IDELauncher.exe`, shortcuts, install path. Compiled by `ISCC.exe` (called from `build.py` step 4). |
+
+There are no other build batch files, spec files, or CI workflows in this repository; `python build.py` is the supported full pipeline.
 
 ---
 
@@ -15,9 +29,9 @@ python build.py
 Steps run in order:
 
 1. **Icon** — Clears `output/`, then `build/build_icon.py` → `app.ico` (from `assets/app_icon.png`).
-2. **EXE** — PyInstaller on `src/launcher.py` → `dist/MultiIDELauncher.exe`.
-3. **Portable ZIP** → `output/MultiIDELauncher-Portable.zip`.
-4. **Installer** — Inno Setup 6 (`build/installer.iss`) → `output/MultiIDELauncher-Setup.exe`.
+2. **EXE** — PyInstaller on `src/launcher.py` → `dist/IDELauncher.exe`.
+3. **Portable ZIP** → `output/IDELauncher-Portable.zip`.
+4. **Installer** — Inno Setup 6 (`build/installer.iss`) → `output/IDELauncher-Setup.exe`.
 
 ---
 
@@ -46,10 +60,10 @@ python build/build_icon.py path/to/logo.png
 **2. EXE**
 
 ```bash
-pyinstaller --onefile --noconsole --icon=app.ico --add-data "app.ico;." --name "MultiIDELauncher" src/launcher.py
+pyinstaller --onefile --noconsole --icon=app.ico --add-data "app.ico;." --name "IDELauncher" src/launcher.py
 ```
 
-Output: `dist/MultiIDELauncher.exe`.
+Output: `dist/IDELauncher.exe`.
 
 **3. Portable ZIP**
 
@@ -68,7 +82,7 @@ Or open `build/installer.iss` in Inno Setup 6 and use **Build → Compile**.
 
 ## Installer behaviour
 
-- **Install path:** `C:\Program Files\MultiIDELauncher\`
+- **Install path:** `C:\Program Files\IDELauncher\`
 - **Permissions:** Users get write access to the install folder (config and crash log beside the EXE).
 - **Shortcuts:** Start Menu; optional Desktop icon.
 - **Uninstall:** Windows Add or remove programs.
@@ -79,5 +93,5 @@ Or open `build/installer.iss` in Inno Setup 6 and use **Build → Compile**.
 
 - **Root:** `build.py` (entry point), `src/launcher.py`, `assets/`, README/BUILD/CHANGELOG.
 - **build/** — `build_icon.py`, `installer.iss`.
-- **output/** — Cleared at start of build; holds `MultiIDELauncher-Portable.zip` and `MultiIDELauncher-Setup.exe`.
-- **dist/** — PyInstaller output (`MultiIDELauncher.exe`); not in git.
+- **output/** — Cleared at start of build; holds `IDELauncher-Portable.zip` and `IDELauncher-Setup.exe`.
+- **dist/** — PyInstaller output (`IDELauncher.exe`); not in git.

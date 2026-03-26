@@ -1,4 +1,4 @@
-# Multi-IDE Launcher
+# IDE Launcher
 
 Launch multiple instances of VS Code, Cursor, Codex & Antigravity — each with separate profiles for different accounts.
 
@@ -22,26 +22,26 @@ Easily launch **VS Code**, **Cursor**, **Antigravity**, and **Codex** with separ
 
 ### Option A — Installer (recommended)
 
-1. Download **MultiIDELauncher-Setup.exe** from [Releases](https://github.com/AdamNatad/MultiIDELauncher/releases).
+1. Download **IDELauncher-Setup.exe** from [Releases](https://github.com/AdamNatad/IDELauncher/releases).
 2. Run the installer (admin required).
-3. Install path: `C:\Program Files\MultiIDELauncher\`.
+3. Install path: `C:\Program Files\IDELauncher\`.
 4. Launch from the Start Menu (or Desktop) shortcut.
 
 Config and crash log are created in the install folder on first run.
 
 ### Option B — Portable (ZIP)
 
-1. Download **MultiIDELauncher-Portable.zip** from [Releases](https://github.com/AdamNatad/MultiIDELauncher/releases).
-2. Extract anywhere (e.g. `D:\Tools\MultiIDELauncher`).
-3. Run **MultiIDELauncher.exe**.
+1. Download **IDELauncher-Portable.zip** from [Releases](https://github.com/AdamNatad/IDELauncher/releases).
+2. Extract anywhere (e.g. `D:\Tools\IDELauncher`).
+3. Run **IDELauncher.exe**.
 
 Config and crash log are created in the same folder as the EXE.
 
 ### Option C — Run from source
 
 ```bash
-git clone https://github.com/AdamNatad/MultiIDELauncher.git
-cd MultiIDELauncher
+git clone https://github.com/AdamNatad/IDELauncher.git
+cd IDELauncher
 python src/launcher.py
 ```
 
@@ -81,17 +81,17 @@ python build.py
 
 | Artifact      | Path |
 |---------------|------|
-| Portable ZIP  | `output/MultiIDELauncher-Portable.zip` |
-| Installer     | `output/MultiIDELauncher-Setup.exe`   |
+| Portable ZIP  | `output/IDELauncher-Portable.zip` |
+| Installer     | `output/IDELauncher-Setup.exe`   |
 
-See **[BUILD.md](BUILD.md)** for step-by-step and folder layout.
+See **[BUILD.md](BUILD.md)** for step-by-step, **Build scripts** (every script in the pipeline), and folder layout.
 
 ---
 
 ## Project structure
 
 ```
-MultiIDELauncher/
+IDELauncher/
 ├── build.py
 ├── README.md
 ├── BUILD.md
@@ -104,10 +104,10 @@ MultiIDELauncher/
 │   ├── build_icon.py
 │   └── installer.iss
 ├── dist/                    (generated)
-│   └── MultiIDELauncher.exe
+│   └── IDELauncher.exe
 └── output/                  (generated)
-    ├── MultiIDELauncher-Portable.zip
-    └── MultiIDELauncher-Setup.exe
+    ├── IDELauncher-Portable.zip
+    └── IDELauncher-Setup.exe
 ```
 
 | Path | Purpose |
@@ -129,7 +129,7 @@ MultiIDELauncher/
 
 ## Support / Help
 
-- **Bugs / issues:** [GitHub Issues](https://github.com/AdamNatad/MultiIDELauncher/issues)
+- **Bugs / issues:** [GitHub Issues](https://github.com/AdamNatad/IDELauncher/issues)
 
 ---
 
@@ -139,4 +139,4 @@ MultiIDELauncher/
 
 ---
 
-**Multi-IDE Launcher** — Launch multiple instances of VS Code, Cursor, Codex & Antigravity.
+**IDE Launcher** — Launch multiple instances of VS Code, Cursor, Codex & Antigravity.

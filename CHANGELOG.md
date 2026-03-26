@@ -4,6 +4,16 @@ Notable changes. Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/
 
 ---
 
+## [2.0.1] — 2026-03-26
+
+### Changed
+
+- Display name and window title: **IDE Launcher by Adam Natad**.
+- Executable, portable ZIP, and installer: `IDELauncher.exe`, `IDELauncher-Portable.zip`, `IDELauncher-Setup.exe`.
+- Default profile directory: `%LOCALAPPDATA%\IDELauncher\Profiles`.
+
+---
+
 ## [2.0.0] — 2026-03-10
 
 Major revamp: Multi-IDE Launcher.
@@ -53,5 +63,6 @@ First release.
 
 ---
 
-[2.0.0]: https://github.com/AdamNatad/MultiIDELauncher/releases/tag/v2.0.0
-[1.0.0]: https://github.com/AdamNatad/MultiIDELauncher/releases/tag/v1.0.0
+[2.0.1]: https://github.com/AdamNatad/IDELauncher/releases/tag/v2.0.1
+[2.0.0]: https://github.com/AdamNatad/IDELauncher/releases/tag/v2.0.0
+[1.0.0]: https://github.com/AdamNatad/IDELauncher/releases/tag/v1.0.0

@@ -1,4 +1,4 @@
-"""Build app.ico from your logo PNG for Windows (PyInstaller + Inno Setup).
+"""Build app.ico from your logo PNG for IDE Launcher (PyInstaller + Inno Setup).
 
 Run from project root:  python build\\build_icon.py
 Or with custom logo:     python build\\build_icon.py path\\to\\logo.png

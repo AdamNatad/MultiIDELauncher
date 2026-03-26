@@ -12,6 +12,7 @@ dist/
 *.spec
 
 # PyInstaller (build/ keeps our scripts; ignore its output subdirs)
+build/IDELauncher/
 build/MultiIDELauncher/
 build/VSCodeMD/
 

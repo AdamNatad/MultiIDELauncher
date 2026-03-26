@@ -1,19 +1,19 @@
-; Multi-IDE Launcher — Inno Setup 6 (v2.0.0)
+; IDE Launcher — Inno Setup 6 (v2.0.1)
 ; Compiled by:  python build.py  (from project root) or ISCC.exe build\installer.iss
 ; Paths: relative to this file (build/); ..\ = project root
 
-#define MyAppName "Multi-IDE Launcher"
-#define MyAppShortName "MultiIDELauncher"
-#define MyAppPublisher "Multi-IDE Launcher"
-#define MyAppSupportURL "https://github.com/AdamNatad/MultiIDELauncher/issues"
-#define MyAppHelpURL "https://github.com/AdamNatad/MultiIDELauncher"
-#define MyAppExeName "MultiIDELauncher.exe"
+#define MyAppName "IDE Launcher by Adam Natad"
+#define MyAppShortName "IDELauncher"
+#define MyAppPublisher "Adam Natad"
+#define MyAppSupportURL "https://github.com/AdamNatad/IDELauncher/issues"
+#define MyAppHelpURL "https://github.com/AdamNatad/IDELauncher"
+#define MyAppExeName "IDELauncher.exe"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#MyAppName}
-AppVersion=2.0.0
-AppVerName={#MyAppName} (v2.0.0)
+AppVersion=2.0.1
+AppVerName={#MyAppName} (v2.0.1)
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppHelpURL}
 AppSupportURL={#MyAppSupportURL}
@@ -23,7 +23,7 @@ DisableProgramGroupPage=yes
 SetupIconFile=..\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\output
-OutputBaseFilename=MultiIDELauncher-Setup
+OutputBaseFilename=IDELauncher-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

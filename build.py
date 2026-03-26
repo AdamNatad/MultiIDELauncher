@@ -1,9 +1,9 @@
 """
-Multi-IDE Launcher — Full build script (v2.0.0).
+IDE Launcher — Full build script (v2.0.1).
 
 Produces:
-  output/MultiIDELauncher-Portable.zip
-  output/MultiIDELauncher-Setup.exe
+  output/IDELauncher-Portable.zip
+  output/IDELauncher-Setup.exe
 
 Run from project root:  python build.py
 
@@ -19,17 +19,17 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-EXE_PROCESS_NAME = "MultiIDELauncher.exe"
-EXE_NAME = "MultiIDELauncher.exe"
+EXE_PROCESS_NAME = "IDELauncher.exe"
+EXE_NAME = "IDELauncher.exe"
 OUT_DIR = os.path.join(ROOT, "output")
-PORTABLE_ZIP = os.path.join(ROOT, "output", "MultiIDELauncher-Portable.zip")
-SETUP_EXE = os.path.join(ROOT, "output", "MultiIDELauncher-Setup.exe")
+PORTABLE_ZIP = os.path.join(ROOT, "output", "IDELauncher-Portable.zip")
+SETUP_EXE = os.path.join(ROOT, "output", "IDELauncher-Setup.exe")
 DIST_EXE = os.path.join(ROOT, "dist", EXE_NAME)
 ISCC = r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
 
 def kill_running_process() -> None:
-    """Kill MultiIDELauncher if running so the build can overwrite the EXE."""
+    """Kill IDELauncher if running so the build can overwrite the EXE."""
     if sys.platform != "win32":
         return
     try:
@@ -77,7 +77,7 @@ def _pyinstaller_cmd(ico: str | None) -> list[str]:
         cmd = [sys.executable, "-m", "pyinstaller"]
     if ico:
         cmd.extend(["--icon", ico, "--add-data", f"{ico};."])
-    cmd.extend(["--onefile", "--noconsole", "--name", "MultiIDELauncher"])
+    cmd.extend(["--onefile", "--noconsole", "--name", "IDELauncher"])
     return cmd
 
 
@@ -138,15 +138,16 @@ def clear_output() -> None:
 
 
 def clear_old_build_cache() -> None:
-    """Remove legacy PyInstaller cache (VSCodeMD) from project rename."""
-    legacy = os.path.join(ROOT, "build", "VSCodeMD")
-    if os.path.isdir(legacy):
-        shutil.rmtree(legacy)
-        print(f"  Cleared legacy cache: build/VSCodeMD")
+    """Remove legacy PyInstaller work dirs from older project / executable names."""
+    for name in ("VSCodeMD", "MultiIDELauncher"):
+        legacy = os.path.join(ROOT, "build", name)
+        if os.path.isdir(legacy):
+            shutil.rmtree(legacy)
+            print(f"  Cleared legacy cache: build/{name}")
 
 
 def main() -> int:
-    print("\n=== Multi-IDE Launcher — Full build (portable ZIP + installer) ===")
+    print("\n=== IDE Launcher — Full build (portable ZIP + installer) ===")
     kill_running_process()
     clear_output()
     clear_old_build_cache()

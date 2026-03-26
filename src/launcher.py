@@ -1,4 +1,4 @@
-# Multi-IDE Launcher
+# IDE Launcher
 # Launch multiple instances of VSCode, Cursor, Codex, Antigravity & Claude
 # Build from project root: python build.py
 
@@ -19,10 +19,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import tkinter.font as tkfont
 
-APP_NAME = "Multi-IDE Launcher by Adam Natad"
+APP_NAME = "IDE Launcher by Adam Natad"
 APP_TAGLINE = "Launch multiple instances of VSCode, Cursor, Codex, Antigravity & Claude"
 CONFIG_FILENAME = "config.ini"
-REPORT_BUGS_URL = "https://github.com/AdamNatad/MultiIDELauncher/issues"
+REPORT_BUGS_URL = "https://github.com/AdamNatad/IDELauncher/issues"
 
 IDE_TYPES = ("vscode", "cursor", "antigravity", "codex", "claude")
 IDE_DISPLAY_NAMES = {"vscode": "VSCode", "cursor": "Cursor", "antigravity": "Antigravity", "codex": "Codex", "claude": "Claude"}
@@ -300,9 +300,9 @@ class ConfigManager:
         if os_name() == "Windows":
             local = os.environ.get("LOCALAPPDATA", "")
             if local:
-                return os.path.join(local, "MultiIDELauncher", "Profiles")
+                return os.path.join(local, "IDELauncher", "Profiles")
             return r"D:\MultiIDE-Profiles"
-        return os.path.expanduser("~/MultiIDELauncher/Profiles")
+        return os.path.expanduser("~/IDELauncher/Profiles")
 
     def _migrate_old_config(self) -> None:
         """Migrate old vscode_path + profiles format to new paths + ide|name format."""
@@ -1008,6 +1008,8 @@ class App(tk.Tk):
                 except Exception:
                     pass
         super().__init__()
+        # Hide until UI is built — avoids a brief empty white window on Windows.
+        self.withdraw()
         self.title(APP_NAME)
         _icon = app_icon_path()
         if os.path.isfile(_icon):
@@ -1069,6 +1071,10 @@ class App(tk.Tk):
 
         global _app_ref
         _app_ref = self
+
+        self.deiconify()
+        self.lift()
+        self.focus_force()
 
     def _defocus_on_click(self, e):
         try:
@@ -1466,7 +1472,7 @@ class App(tk.Tk):
             path_frm = ttk.Frame(tab, style="Card.TFrame", padding=4)
             path_frm.grid(row=0, column=0, sticky="ew", pady=(0, 4))
             path_frm.columnconfigure(1, weight=1)
-            ttk.Label(path_frm, text=f"{IDE_DISPLAY_NAMES.get(ide, ide)} Path", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+            ttk.Label(path_frm, text="Path", style="Card.TLabel").grid(row=0, column=0, sticky="w")
             entry = ttk.Entry(path_frm, textvariable=self.var_ide_paths[ide], width=45)
             entry.grid(row=0, column=1, sticky="ew", padx=(4, 4))
             entry.config(state="disabled")
@@ -1484,7 +1490,7 @@ class App(tk.Tk):
             header_frm = ttk.Frame(body, style="Card.TFrame")
             header_frm.grid(row=0, column=0, sticky="ew", pady=(0, 2))
             header_frm.columnconfigure(0, weight=1)
-            ttk.Label(header_frm, text="Multi-IDE Launcher Profiles", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size") - 1, "bold")).grid(row=0, column=0, sticky="w", padx=(8, 6), pady=2)
+            ttk.Label(header_frm, text="IDE Launcher Profiles", style="Card.TLabel", font=(self.base_font.cget("family"), self.base_font.cget("size") - 1, "bold")).grid(row=0, column=0, sticky="w", padx=(8, 6), pady=2)
 
             table = ttk.Frame(body)
             table.grid(row=1, column=0, sticky="nsew")
